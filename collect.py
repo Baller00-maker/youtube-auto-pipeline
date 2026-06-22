@@ -9,14 +9,20 @@
 import json
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 CHANNEL_URL = "https://www.youtube.com/@TheMilitaryShow/videos"
 NUM_VIDEOS_TO_CHECK = 10
 
 
+YT_DLP_CMD = [sys.executable, "-m", "yt_dlp"]
+TMP_DIR = tempfile.gettempdir()
+
+
 def run_yt_dlp_json(url, extra_args=None):
     """Exécute yt-dlp et retourne la sortie JSON (une ligne JSON par vidéo en mode flat)."""
-    cmd = ["yt-dlp", "--flat-playlist", "-J", url]
+    cmd = YT_DLP_CMD + ["--flat-playlist", "-J", url]
     if extra_args:
         cmd.extend(extra_args)
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -25,8 +31,7 @@ def run_yt_dlp_json(url, extra_args=None):
 
 def get_recent_video_ids(channel_url, limit):
     """Liste les IDs des dernières vidéos de la chaîne (sans télécharger)."""
-    cmd = [
-        "yt-dlp",
+    cmd = YT_DLP_CMD + [
         "--flat-playlist",
         "--playlist-end", str(limit),
         "-J",
@@ -41,7 +46,7 @@ def get_recent_video_ids(channel_url, limit):
 def get_video_details(video_id):
     """Récupère les métadonnées complètes (dont view_count) pour une vidéo donnée."""
     url = f"https://www.youtube.com/watch?v={video_id}"
-    cmd = ["yt-dlp", "-J", "--no-warnings", url]
+    cmd = YT_DLP_CMD + ["-J", "--no-warnings", url]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
     return json.loads(result.stdout)
 
@@ -49,18 +54,18 @@ def get_video_details(video_id):
 def get_transcript(video_id):
     """Télécharge les sous-titres auto (anglais) en VTT, les lit, et nettoie le texte."""
     url = f"https://www.youtube.com/watch?v={video_id}"
-    cmd = [
-        "yt-dlp",
+    out_template = str(Path(TMP_DIR) / f"{video_id}.%(ext)s")
+    cmd = YT_DLP_CMD + [
         "--write-auto-sub",
         "--sub-lang", "en",
         "--skip-download",
         "--sub-format", "vtt",
-        "-o", f"/tmp/{video_id}.%(ext)s",
+        "-o", out_template,
         url,
     ]
     subprocess.run(cmd, capture_output=True, text=True, check=True)
 
-    vtt_path = f"/tmp/{video_id}.en.vtt"
+    vtt_path = str(Path(TMP_DIR) / f"{video_id}.en.vtt")
     try:
         with open(vtt_path, "r", encoding="utf-8") as f:
             raw = f.read()
