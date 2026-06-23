@@ -18,7 +18,7 @@ from pathlib import Path
 import google.generativeai as genai
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-MODEL_NAME = "gemini-3-flash"
+MODEL_NAME = "gemini-2.5-flash"
 
 TOPICS_FILE = Path("topics.txt")
 USED_TOPICS_FILE = Path("used_topics.txt")
