@@ -122,7 +122,10 @@ entirely original and factually accurate about the topic above):
 {json.dumps(style_profile, indent=2)}
 
 Requirements:
-- Target length: approximately {target_words} words (this is critical, stay within 5% of this number)
+- Target length: approximately {target_words} words. THIS IS MANDATORY. Do NOT stop early.
+  Keep writing until you reach this word count. A script shorter than {int(target_words * 0.85)}
+  words is considered a FAILURE. Add more historical detail, dialogue, and description as
+  needed to reach the target length naturally.
 - Follow the narrative_structure beats in order
 - Match the tone, sentence_style, and pacing_notes described above
 - Use the emotional_triggers techniques naturally
@@ -133,7 +136,7 @@ Requirements:
 
 Write the full script now."""
 
-    return call_llm(client, prompt, max_tokens=4096)
+    return call_llm(client, prompt, max_tokens=6000)
 
 
 def main():
