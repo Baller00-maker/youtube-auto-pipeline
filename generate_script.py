@@ -6,6 +6,8 @@
 - Appel Gemini n°2 : génère un script ORIGINAL sur ce sujet, en respectant le profil de style
   -> Cet appel ne reçoit JAMAIS le texte source, uniquement le profil JSON abstrait
 - Sauvegarde le script final dans script.json pour l'étape suivante (production vidéo)
+
+Utilise le package officiel "google-genai" (le package "google-generativeai" est déprécié).
 """
 
 import json
@@ -15,7 +17,7 @@ import re
 import sys
 from pathlib import Path
 
-import google.generativeai as genai
+from google import genai
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 MODEL_NAME = "gemini-2.5-flash"
@@ -55,7 +57,7 @@ def pick_topic():
     return topic
 
 
-def generate_new_topic(model):
+def generate_new_topic(client):
     """Si la liste de sujets est épuisée, demande à Gemini d'en proposer un nouveau,
     cohérent avec la niche (histoire militaire / guerre)."""
     prompt = (
@@ -64,11 +66,11 @@ def generate_new_topic(model):
         "battle, or military event that would perform well on YouTube. "
         "Reply with ONLY the topic title, nothing else, no quotes, no explanation."
     )
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
     return response.text.strip()
 
 
-def extract_style_profile(model, transcript):
+def extract_style_profile(client, transcript):
     """Appel Gemini n°1 : extraction du profil de style structurel.
     IMPORTANT: on demande explicitement de NE PAS reproduire le texte source."""
     prompt = f"""Analyze the following YouTube video transcript and extract its STRUCTURAL style profile.
@@ -91,13 +93,13 @@ TRANSCRIPT:
 
 Return ONLY the JSON object, no markdown formatting, no explanation."""
 
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
     text = response.text.strip()
     text = re.sub(r"^```json\s*|\s*```$", "", text.strip())
     return json.loads(text)
 
 
-def generate_script(model, style_profile, topic, target_words):
+def generate_script(client, style_profile, topic, target_words):
     """Appel Gemini n°2 : génération du script ORIGINAL.
     Ne reçoit QUE le profil de style abstrait + le sujet -- jamais le texte source."""
     prompt = f"""You are a professional scriptwriter for a military history YouTube channel.
@@ -121,7 +123,7 @@ Requirements:
 
 Write the full script now."""
 
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
     return response.text.strip()
 
 
@@ -130,15 +132,14 @@ def main():
         print("Erreur : GEMINI_API_KEY n'est pas définie dans les variables d'environnement.", file=sys.stderr)
         sys.exit(1)
 
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel(MODEL_NAME)
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
     print("Chargement de la vidéo de référence...")
     reference = load_reference()
     print(f"Référence : {reference['title']} ({reference['view_count']} vues)")
 
     print("Extraction du profil de style (appel Gemini #1)...")
-    style_profile = extract_style_profile(model, reference["transcript"])
+    style_profile = extract_style_profile(client, reference["transcript"])
     print("Profil de style extrait :")
     print(json.dumps(style_profile, indent=2, ensure_ascii=False))
 
@@ -146,12 +147,12 @@ def main():
     topic = pick_topic()
     if topic is None:
         print("Liste de sujets épuisée, génération d'un nouveau sujet via Gemini...")
-        topic = generate_new_topic(model)
+        topic = generate_new_topic(client)
     print(f"Sujet retenu : {topic}")
 
     target_words = random.randint(TARGET_WORD_COUNT_MIN, TARGET_WORD_COUNT_MAX)
     print(f"\nGénération du script original (appel Gemini #2, cible {target_words} mots)...")
-    script_text = generate_script(model, style_profile, topic, target_words)
+    script_text = generate_script(client, style_profile, topic, target_words)
     actual_words = len(script_text.split())
     print(f"Script généré : {actual_words} mots")
 
