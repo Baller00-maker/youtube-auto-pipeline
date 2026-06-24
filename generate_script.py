@@ -110,33 +110,47 @@ Return ONLY the JSON object, no markdown formatting, no explanation."""
 
 
 def generate_script(client, style_profile, topic, target_words):
-    """Appel LLM n°2 : génération du script ORIGINAL.
-    Ne reçoit QUE le profil de style abstrait + le sujet -- jamais le texte source."""
-    prompt = f"""You are a professional scriptwriter for a military history YouTube channel.
+    """Appel LLM n°2 (multi-étapes) : génération du script ORIGINAL section par section.
+    Ne reçoit QUE le profil de style abstrait + le sujet -- jamais le texte source.
 
-Write a COMPLETE, ORIGINAL video script about this topic: "{topic}"
+    Génère un bloc par étape de narrative_structure plutôt qu'en un seul gros bloc :
+    les LLM ont tendance à s'arrêter "naturellement" bien avant la longueur demandée
+    sur une génération unique, mais respectent mieux une cible courte par section."""
+    beats = style_profile.get("narrative_structure") or ["introduction", "development", "climax", "conclusion"]
+    words_per_beat = max(150, target_words // len(beats))
 
-The script must follow this STYLE PROFILE (structure and tone only -- all content must be
-entirely original and factually accurate about the topic above):
+    sections = []
+    previous_text = ""
 
+    for i, beat in enumerate(beats):
+        prompt = f"""You are a professional scriptwriter for a military history YouTube channel.
+
+You are writing ONE SECTION of a longer video script about: "{topic}"
+
+This section corresponds to the narrative beat: "{beat}" (section {i + 1} of {len(beats)}).
+
+STYLE PROFILE to follow (structure and tone only -- content must be original and accurate):
 {json.dumps(style_profile, indent=2)}
 
-Requirements:
-- Target length: approximately {target_words} words. THIS IS MANDATORY. Do NOT stop early.
-  Keep writing until you reach this word count. A script shorter than {int(target_words * 0.85)}
-  words is considered a FAILURE. Add more historical detail, dialogue, and description as
-  needed to reach the target length naturally.
-- Follow the narrative_structure beats in order
-- Match the tone, sentence_style, and pacing_notes described above
-- Use the emotional_triggers techniques naturally
-- This is a voice-over narration script: write it as continuous spoken narration, NOT as a
-  screenplay with scene directions. No camera directions, no [brackets], no headers.
-- Be historically accurate -- do not invent fake events, only dramatize real history
-- End with a natural closing line (no generic "like and subscribe" -- something thematic)
+{"Here is what has been narrated so far, for continuity (do not repeat it, continue naturally from it):" if previous_text else ""}
+{previous_text[-1200:] if previous_text else ""}
 
-Write the full script now."""
+Requirements for THIS SECTION ONLY:
+- Write approximately {words_per_beat} words for this section alone (mandatory, do not undershoot)
+- Continuous spoken narration only, NOT a screenplay -- no camera directions, no [brackets], no headers
+- Match the tone, sentence_style, and pacing_notes from the style profile
+- Be historically accurate -- only dramatize real history
+- {"Do NOT add a conclusion or closing line yet, more sections follow." if i < len(beats) - 1 else "This is the FINAL section: end with a natural thematic closing line (no generic 'like and subscribe')."}
 
-    return call_llm(client, prompt, max_tokens=6000)
+Write only the narration text for this section now."""
+
+        print(f"  Génération section {i + 1}/{len(beats)} ({beat}, cible {words_per_beat} mots)...")
+        section_text = call_llm(client, prompt, max_tokens=2048)
+        print(f"    -> {len(section_text.split())} mots obtenus")
+        sections.append(section_text)
+        previous_text += " " + section_text
+
+    return "\n\n".join(sections)
 
 
 def main():
