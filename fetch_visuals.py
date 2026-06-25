@@ -98,7 +98,7 @@ def search_pexels_photo(query):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         },
     )
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=15) as resp:
         data = json.loads(resp.read())
     photos = data.get("photos", [])
     if not photos:
@@ -114,7 +114,7 @@ def search_pexels_video(query):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         },
     )
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=15) as resp:
         data = json.loads(resp.read())
     videos = data.get("videos", [])
     if not videos:
@@ -129,7 +129,7 @@ def download_file(url, dest_path):
         url,
         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
     )
-    with urllib.request.urlopen(req) as resp, open(dest_path, "wb") as out:
+    with urllib.request.urlopen(req, timeout=30) as resp, open(dest_path, "wb") as out:
         out.write(resp.read())
 
 
