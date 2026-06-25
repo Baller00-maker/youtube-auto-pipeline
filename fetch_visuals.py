@@ -93,7 +93,10 @@ as the number of segments ({len(groups)}). No explanation, no markdown."""
 def search_pexels_photo(query):
     req = urllib.request.Request(
         f"{PEXELS_PHOTO_SEARCH}?query={urllib.parse.quote(query)}&per_page=1&orientation=landscape",
-        headers={"Authorization": PEXELS_API_KEY},
+        headers={
+            "Authorization": PEXELS_API_KEY,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        },
     )
     with urllib.request.urlopen(req) as resp:
         data = json.loads(resp.read())
@@ -106,7 +109,10 @@ def search_pexels_photo(query):
 def search_pexels_video(query):
     req = urllib.request.Request(
         f"{PEXELS_VIDEO_SEARCH}?query={urllib.parse.quote(query)}&per_page=1&orientation=landscape",
-        headers={"Authorization": PEXELS_API_KEY},
+        headers={
+            "Authorization": PEXELS_API_KEY,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        },
     )
     with urllib.request.urlopen(req) as resp:
         data = json.loads(resp.read())
@@ -119,7 +125,12 @@ def search_pexels_video(query):
 
 
 def download_file(url, dest_path):
-    urllib.request.urlretrieve(url, dest_path)
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+    )
+    with urllib.request.urlopen(req) as resp, open(dest_path, "wb") as out:
+        out.write(resp.read())
 
 
 def main():
