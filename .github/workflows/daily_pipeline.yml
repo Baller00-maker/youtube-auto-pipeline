@@ -1,0 +1,46 @@
+name: Daily Video Pipeline
+
+on:
+  schedule:
+    # Tous les jours à 08:00 UTC (ajuste l'heure si besoin -- GitHub Actions utilise UTC)
+    - cron: "0 8 * * *"
+  workflow_dispatch: {}
+    # Permet aussi de lancer le pipeline manuellement depuis l'onglet "Actions" sur GitHub,
+    # utile pour tester sans attendre le planning.
+
+jobs:
+  produce-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Récupération du dépôt
+        uses: actions/checkout@v4
+
+      - name: Installation de Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installation de ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Installation des dépendances Python
+        run: pip install -r requirements.txt
+
+      - name: Exécution du pipeline complet
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: python run_pipeline.py
+
+      - name: Sauvegarde de la liste des sujets déjà utilisés
+        run: |
+          git config user.name "pipeline-bot"
+          git config user.email "pipeline-bot@users.noreply.github.com"
+          git add used_topics.txt
+          git diff --staged --quiet || git commit -m "Mise à jour des sujets utilisés [skip ci]"
+          git push
