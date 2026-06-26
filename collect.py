@@ -26,17 +26,39 @@ YT_DLP_CMD = [
     "--extractor-args", "youtube:player_client=android,web",
 ]
 
+def normalize_netscape_cookies(raw_bytes):
+    """Corrige les lignes de cookies où le drapeau 'inclure les sous-domaines' (2e colonne)
+    est incohérent avec le point initial du domaine (1ère colonne) -- incohérence fréquente
+    dans les exports de certaines extensions navigateur, rejetée par le parseur Python strict."""
+    text = raw_bytes.decode("utf-8", errors="replace")
+    fixed_lines = []
+    for line in text.splitlines():
+        if line.startswith("#") or not line.strip():
+            fixed_lines.append(line)
+            continue
+        parts = line.split("\t")
+        if len(parts) == 7:
+            domain = parts[0]
+            initial_dot = domain.startswith(".")
+            parts[1] = "TRUE" if initial_dot else "FALSE"
+            fixed_lines.append("\t".join(parts))
+        else:
+            fixed_lines.append(line)
+    return ("\n".join(fixed_lines) + "\n").encode("utf-8")
+
+
 # Si des cookies sont fournis (secret GitHub YOUTUBE_COOKIES, encodés en base64 pour éviter
-# toute corruption du format lors du copier-coller), on les décode et on les écrit dans un
-# fichier temporaire, puis on les passe à toutes les commandes yt-dlp.
+# toute corruption du format lors du copier-coller), on les décode, on les normalise, et on
+# les écrit dans un fichier temporaire, puis on les passe à toutes les commandes yt-dlp.
 YOUTUBE_COOKIES = os.environ.get("YOUTUBE_COOKIES")
 if YOUTUBE_COOKIES:
     import base64
     cookies_path = Path(TMP_DIR) / "youtube_cookies.txt"
     try:
         decoded = base64.b64decode(YOUTUBE_COOKIES)
-        cookies_path.write_bytes(decoded)
-        print(f"Cookies YouTube décodés (base64) et écrits dans {cookies_path}.")
+        normalized = normalize_netscape_cookies(decoded)
+        cookies_path.write_bytes(normalized)
+        print(f"Cookies YouTube décodés, normalisés et écrits dans {cookies_path}.")
     except Exception as e:
         print(f"Avertissement : échec du décodage base64 des cookies ({e}), tentative en texte brut.")
         cookies_path.write_text(YOUTUBE_COOKIES, encoding="utf-8")
