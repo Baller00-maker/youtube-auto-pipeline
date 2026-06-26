@@ -1,24 +1,34 @@
 """
 Orchestrateur du pipeline complet.
-Exécute dans l'ordre les 6 étapes, en s'arrêtant immédiatement si une étape échoue
-(pour ne pas uploader une vidéo construite sur des données incomplètes).
+Exécute dans l'ordre les étapes automatisables, en s'arrêtant immédiatement si une étape
+échoue (pour ne pas uploader une vidéo construite sur des données incomplètes).
 
-Étapes :
-1. collect.py          -> collecte de la vidéo de référence (transcription)
-2. generate_script.py  -> analyse de style + script original
-3. produce_audio.py    -> narration audio (voix)
-4. transcribe.py       -> sous-titres + timing précis (Whisper)
-5. fetch_visuals.py    -> images/clips vidéo par segment
-6. assemble_video.py   -> montage final (audio + visuels + sous-titres incrustés)
-7. upload_video.py     -> upload YouTube en "non répertorié" (validation manuelle requise)
+IMPORTANT : l'étape de collecte (collect.py) n'est PAS incluse ici. YouTube bloque trop
+souvent les IP de datacenter (GitHub Actions) pour scraper les vidéos de façon fiable.
+À la place :
+  - L'utilisateur lance collect.py manuellement EN LOCAL (sur son PC) environ 1x/semaine
+  - Le fichier reference.json généré est commité sur le repo
+  - Ce pipeline automatisé réutilise ce reference.json existant pour produire une
+    nouvelle vidéo à chaque exécution (le sujet change, le style de référence reste figé
+    jusqu'au prochain rafraîchissement manuel).
+
+Étapes automatisées :
+1. generate_script.py  -> analyse de style + script original
+2. produce_audio.py    -> narration audio (voix)
+3. transcribe.py       -> sous-titres + timing précis (Whisper)
+4. fetch_visuals.py    -> images/clips vidéo par segment
+5. assemble_video.py   -> montage final (audio + visuels + sous-titres incrustés)
+6. upload_video.py     -> upload YouTube en "non répertorié" (validation manuelle requise)
 """
 
-import subprocess
 import sys
+from pathlib import Path
+import subprocess
 import time
 
+REFERENCE_FILE = Path("reference.json")
+
 STEPS = [
-    ("collect.py", "Collecte de la vidéo de référence"),
     ("generate_script.py", "Analyse de style + génération du script"),
     ("produce_audio.py", "Génération de la narration audio"),
     ("transcribe.py", "Sous-titres + timing (Whisper)"),
@@ -43,7 +53,16 @@ def run_step(script_name, description):
 
 
 def main():
-    print("Démarrage du pipeline complet de production vidéo.\n")
+    print("Démarrage du pipeline automatisé de production vidéo.\n")
+
+    if not REFERENCE_FILE.exists():
+        print(
+            "ERREUR : reference.json introuvable. Lance d'abord 'py collect.py' en local "
+            "sur ton PC, puis commit le fichier reference.json sur le repo avant de relancer "
+            "ce pipeline automatisé.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     for script_name, description in STEPS:
         success = run_step(script_name, description)
