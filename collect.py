@@ -16,7 +16,10 @@ CHANNEL_URL = "https://www.youtube.com/@TheMilitaryShow/videos"
 NUM_VIDEOS_TO_CHECK = 10
 
 
-YT_DLP_CMD = [sys.executable, "-m", "yt_dlp"]
+YT_DLP_CMD = [
+    sys.executable, "-m", "yt_dlp",
+    "--extractor-args", "youtube:player_client=android,web",
+]
 TMP_DIR = tempfile.gettempdir()
 
 
