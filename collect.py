@@ -1,158 +1,60 @@
 """
-Étape 1 du pipeline : collecte de la vidéo de référence
-- Récupère les 10 dernières vidéos de la chaîne cible
-- Sélectionne celle qui a le plus de vues
-- Extrait sa transcription (sous-titres auto)
-- Sauvegarde le résultat dans reference.json pour l'étape suivante (analyse de style)
+Utilitaire (à lancer une seule fois, en local) : filtre un fichier cookies.txt
+exporté par l'extension navigateur pour ne garder que les lignes concernant
+youtube.com et google.com -- réduit fortement la taille pour respecter la
+limite de 64 Ko des secrets GitHub.
 
-Utilise des cookies YouTube (variable d'environnement YOUTUBE_COOKIES, optionnelle) pour
-contourner le blocage anti-bot de YouTube sur les IP de datacenter (ex: GitHub Actions).
+Usage :
+    py filter_cookies.py cookies.txt cookies_filtered.txt
 """
 
-import json
-import os
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-CHANNEL_URL = "https://www.youtube.com/@TheMilitaryShow/videos"
-NUM_VIDEOS_TO_CHECK = 10
-
-TMP_DIR = tempfile.gettempdir()
-
-YT_DLP_CMD = [
-    sys.executable, "-m", "yt_dlp",
-    "--extractor-args", "youtube:player_client=android,web",
-]
-
-# Si des cookies sont fournis (secret GitHub YOUTUBE_COOKIES), on les écrit dans un
-# fichier temporaire et on les passe à toutes les commandes yt-dlp.
-YOUTUBE_COOKIES = os.environ.get("YOUTUBE_COOKIES")
-if YOUTUBE_COOKIES:
-    cookies_path = Path(TMP_DIR) / "youtube_cookies.txt"
-    cookies_path.write_text(YOUTUBE_COOKIES, encoding="utf-8")
-    YT_DLP_CMD += ["--cookies", str(cookies_path)]
-    print(f"Cookies YouTube détectés et écrits dans {cookies_path}.")
-else:
-    print("Aucun cookie YouTube fourni (YOUTUBE_COOKIES non définie) -- mode sans authentification.")
-
-
-def run_yt_dlp_json(url, extra_args=None):
-    """Exécute yt-dlp et retourne la sortie JSON (une ligne JSON par vidéo en mode flat)."""
-    cmd = YT_DLP_CMD + ["--flat-playlist", "-J", url]
-    if extra_args:
-        cmd.extend(extra_args)
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    return json.loads(result.stdout)
-
-
-def get_recent_video_ids(channel_url, limit):
-    """Liste les IDs des dernières vidéos de la chaîne (sans télécharger)."""
-    cmd = YT_DLP_CMD + [
-        "--flat-playlist",
-        "--playlist-end", str(limit),
-        "-J",
-        channel_url,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"Erreur yt-dlp lors de la liste des vidéos :\n{result.stderr.strip()[-1500:]}", file=sys.stderr)
-        sys.exit(1)
-    data = json.loads(result.stdout)
-    entries = data.get("entries", [])
-    return [entry["id"] for entry in entries if entry.get("id")]
-
-
-def get_video_details(video_id):
-    """Récupère les métadonnées complètes (dont view_count) pour une vidéo donnée."""
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    cmd = YT_DLP_CMD + ["-J", "--no-warnings", url]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    return json.loads(result.stdout)
-
-
-def get_transcript(video_id):
-    """Télécharge les sous-titres auto (anglais) en VTT, les lit, et nettoie le texte."""
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    out_template = str(Path(TMP_DIR) / f"{video_id}.%(ext)s")
-    cmd = YT_DLP_CMD + [
-        "--write-auto-sub",
-        "--sub-lang", "en",
-        "--skip-download",
-        "--sub-format", "vtt",
-        "-o", out_template,
-        url,
-    ]
-    subprocess.run(cmd, capture_output=True, text=True, check=True)
-
-    vtt_path = str(Path(TMP_DIR) / f"{video_id}.en.vtt")
-    try:
-        with open(vtt_path, "r", encoding="utf-8") as f:
-            raw = f.read()
-    except FileNotFoundError:
-        return None
-
-    # Nettoyage basique du VTT : on garde uniquement les lignes de texte (pas les timecodes)
-    lines = raw.splitlines()
-    text_lines = []
-    seen = set()
-    for line in lines:
-        line = line.strip()
-        if not line or "-->" in line or line.startswith("WEBVTT") or line.isdigit():
-            continue
-        # Supprime les tags type <c> et les doublons consécutifs (fréquents dans les auto-sub)
-        cleaned = line.replace("<c>", "").replace("</c>", "")
-        if cleaned and cleaned not in seen:
-            text_lines.append(cleaned)
-            seen.add(cleaned)
-
-    return " ".join(text_lines)
+KEEP_DOMAINS = ("youtube.com", "google.com")
 
 
 def main():
-    print(f"Récupération des {NUM_VIDEOS_TO_CHECK} dernières vidéos de {CHANNEL_URL}...")
-    video_ids = get_recent_video_ids(CHANNEL_URL, NUM_VIDEOS_TO_CHECK)
-    print(f"IDs trouvés : {video_ids}")
-
-    candidates = []
-    for vid in video_ids:
-        try:
-            details = get_video_details(vid)
-            candidates.append({
-                "id": vid,
-                "title": details.get("title"),
-                "view_count": details.get("view_count", 0),
-                "duration": details.get("duration"),
-            })
-            print(f"  - {vid} | {details.get('title')} | vues: {details.get('view_count')}")
-        except subprocess.CalledProcessError as e:
-            print(f"  ! Erreur sur {vid}, ignorée : {e.stderr.strip()[-500:]}", file=sys.stderr)
-
-    if not candidates:
-        print("Aucune vidéo récupérée, arrêt.", file=sys.stderr)
+    if len(sys.argv) != 3:
+        print("Usage : py filter_cookies.py <fichier_entree> <fichier_sortie>")
         sys.exit(1)
 
-    best = max(candidates, key=lambda c: c["view_count"])
-    print(f"\nVidéo retenue (la plus vue) : {best['title']} ({best['view_count']} vues)")
+    input_path = Path(sys.argv[1])
+    output_path = Path(sys.argv[2])
 
-    transcript = get_transcript(best["id"])
-    if not transcript:
-        print("Transcription introuvable pour cette vidéo, arrêt.", file=sys.stderr)
+    if not input_path.exists():
+        print(f"Erreur : {input_path} introuvable.")
         sys.exit(1)
 
-    output = {
-        "video_id": best["id"],
-        "title": best["title"],
-        "view_count": best["view_count"],
-        "duration": best["duration"],
-        "transcript": transcript,
-    }
+    lines = input_path.read_text(encoding="utf-8").splitlines()
+    kept = []
 
-    with open("reference.json", "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
+    for line in lines:
+        stripped = line.strip()
+        # Garde les lignes d'en-tête (commentaires standard du format Netscape)
+        if stripped.startswith("# Netscape") or stripped.startswith("# HTTP Cookie File") or not stripped:
+            kept.append(line)
+            continue
+        # Garde uniquement les lignes liées aux domaines voulus
+        if any(domain in stripped for domain in KEEP_DOMAINS):
+            kept.append(line)
 
-    print(f"\nTranscription sauvegardée dans reference.json ({len(transcript)} caractères).")
+    output_path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+    size_kb = output_path.stat().st_size / 1024
+    print(f"{len(kept)} lignes gardées sur {len(lines)} -> {output_path}")
+    print(f"Taille finale : {size_kb:.1f} Ko")
+    if size_kb > 60:
+        print("Attention : toujours proche de la limite de 64 Ko de GitHub Secrets.")
+
+    # Encodage base64 : évite toute corruption (tabulations -> espaces) lors du
+    # copier-coller dans la zone de texte de GitHub Secrets.
+    import base64
+    b64_path = output_path.with_suffix(".b64.txt")
+    b64_content = base64.b64encode(output_path.read_bytes()).decode("ascii")
+    b64_path.write_text(b64_content, encoding="utf-8")
+    print(f"\nVersion base64 (à coller dans GitHub Secrets) : {b64_path}")
+    print(f"Taille base64 : {len(b64_content) / 1024:.1f} Ko")
 
 
 if __name__ == "__main__":
