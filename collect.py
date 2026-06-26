@@ -4,9 +4,13 @@
 - Sélectionne celle qui a le plus de vues
 - Extrait sa transcription (sous-titres auto)
 - Sauvegarde le résultat dans reference.json pour l'étape suivante (analyse de style)
+
+Utilise des cookies YouTube (variable d'environnement YOUTUBE_COOKIES, optionnelle) pour
+contourner le blocage anti-bot de YouTube sur les IP de datacenter (ex: GitHub Actions).
 """
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -15,12 +19,23 @@ from pathlib import Path
 CHANNEL_URL = "https://www.youtube.com/@TheMilitaryShow/videos"
 NUM_VIDEOS_TO_CHECK = 10
 
+TMP_DIR = tempfile.gettempdir()
 
 YT_DLP_CMD = [
     sys.executable, "-m", "yt_dlp",
     "--extractor-args", "youtube:player_client=android,web",
 ]
-TMP_DIR = tempfile.gettempdir()
+
+# Si des cookies sont fournis (secret GitHub YOUTUBE_COOKIES), on les écrit dans un
+# fichier temporaire et on les passe à toutes les commandes yt-dlp.
+YOUTUBE_COOKIES = os.environ.get("YOUTUBE_COOKIES")
+if YOUTUBE_COOKIES:
+    cookies_path = Path(TMP_DIR) / "youtube_cookies.txt"
+    cookies_path.write_text(YOUTUBE_COOKIES, encoding="utf-8")
+    YT_DLP_CMD += ["--cookies", str(cookies_path)]
+    print(f"Cookies YouTube détectés et écrits dans {cookies_path}.")
+else:
+    print("Aucun cookie YouTube fourni (YOUTUBE_COOKIES non définie) -- mode sans authentification.")
 
 
 def run_yt_dlp_json(url, extra_args=None):
