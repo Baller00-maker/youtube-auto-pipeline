@@ -106,7 +106,7 @@ def main():
             })
             print(f"  - {vid} | {details.get('title')} | vues: {details.get('view_count')}")
         except subprocess.CalledProcessError as e:
-            print(f"  ! Erreur sur {vid}, ignorée : {e}", file=sys.stderr)
+            print(f"  ! Erreur sur {vid}, ignorée : {e.stderr.strip()[-500:]}", file=sys.stderr)
 
     if not candidates:
         print("Aucune vidéo récupérée, arrêt.", file=sys.stderr)
