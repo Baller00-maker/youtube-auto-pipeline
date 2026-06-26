@@ -55,7 +55,10 @@ def get_recent_video_ids(channel_url, limit):
         "-J",
         channel_url,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Erreur yt-dlp lors de la liste des vidéos :\n{result.stderr.strip()[-1500:]}", file=sys.stderr)
+        sys.exit(1)
     data = json.loads(result.stdout)
     entries = data.get("entries", [])
     return [entry["id"] for entry in entries if entry.get("id")]
