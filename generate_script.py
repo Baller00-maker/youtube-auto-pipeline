@@ -116,9 +116,22 @@ TRANSCRIPT:
 
 Return ONLY the JSON object, no markdown formatting, no explanation."""
 
-    text = call_llm(client, prompt, max_tokens=1024)
-    text = re.sub(r"^```json\s*|\s*```$", "", text.strip())
-    return json.loads(text)
+    for attempt in range(1, 4):
+        text = call_llm(client, prompt, max_tokens=1024)
+        cleaned = re.sub(r"^```json\s*|\s*```$", "", text.strip()).strip()
+        if not cleaned:
+            print(f"  ! Tentative {attempt}/3 : réponse non-vide mais vide après nettoyage Markdown.", file=sys.stderr)
+            print(f"    Texte brut reçu : {text[:300]!r}", file=sys.stderr)
+            time.sleep(3)
+            continue
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            print(f"  ! Tentative {attempt}/3 : JSON invalide ({e}).", file=sys.stderr)
+            print(f"    Texte reçu : {cleaned[:300]!r}", file=sys.stderr)
+            time.sleep(3)
+
+    raise RuntimeError("Impossible d'obtenir un profil de style JSON valide après 3 tentatives.")
 
 
 def generate_script(client, style_profile, topic, target_words):
