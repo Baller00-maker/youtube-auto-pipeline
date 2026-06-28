@@ -15,6 +15,7 @@ import os
 import random
 import re
 import sys
+import time
 from pathlib import Path
 
 from openai import OpenAI
@@ -58,15 +59,26 @@ def pick_topic():
     return topic
 
 
-def call_llm(client, prompt, max_tokens=4096):
-    """Appel générique au modèle via l'endpoint compatible OpenAI de NVIDIA NIM."""
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.8,
-        max_tokens=max_tokens,
-    )
-    return response.choices[0].message.content.strip()
+def call_llm(client, prompt, max_tokens=4096, max_retries=3):
+    """Appel générique au modèle via l'endpoint compatible OpenAI de NVIDIA NIM.
+    Réessaie automatiquement si la réponse est vide (aléa occasionnel observé sur
+    l'API gratuite, pas systématique)."""
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.8,
+            max_tokens=max_tokens,
+        )
+        text = (response.choices[0].message.content or "").strip()
+        if text:
+            return text
+        last_error = "réponse vide"
+        print(f"  ! Tentative {attempt}/{max_retries} : {last_error}, nouvel essai...", file=sys.stderr)
+        time.sleep(3)
+
+    raise RuntimeError(f"L'API n'a renvoyé aucune réponse utilisable après {max_retries} tentatives ({last_error}).")
 
 
 def generate_new_topic(client):
