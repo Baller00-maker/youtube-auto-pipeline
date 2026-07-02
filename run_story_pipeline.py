@@ -13,7 +13,6 @@ STEPS = [
     ("fetch_story_visuals.py", "Visuels Pexels (portrait/vertical)"),
     ("transcribe_story.py", "Sous-titres anglais + timing (Whisper)"),
     ("assemble_story_video.py", "Montage final vertical 1080x1920"),
-    ("upload_short.py", "Upload YouTube Shorts (non répertorié)"),
 ]
 
 
@@ -37,8 +36,8 @@ def main():
 
     print("\n" + "=" * 60)
     print("PIPELINE TERMINÉ.")
-    print("Vidéo uploadée (non répertoriée) → valide sur YouTube Studio.")
-    print("Télécharge story_final.mp4 depuis les Artifacts GitHub pour poster sur TikTok.")
+    print("Télécharge story_final.mp4 depuis les Artifacts GitHub.")
+    print("Poste-la sur YouTube Shorts, TikTok, Instagram Reels...")
     print("=" * 60)
 
 
