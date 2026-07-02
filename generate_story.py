@@ -25,8 +25,8 @@ TOPICS_FILE = Path("story_topics.txt")
 USED_TOPICS_FILE = Path("story_used_topics.txt")
 OUTPUT_FILE = Path("story_script.json")
 
-TARGET_WORDS_MIN = 200
-TARGET_WORDS_MAX = 280
+TARGET_WORDS_MIN = 450
+TARGET_WORDS_MAX = 600  # ~3-4 min en narration française dramatique
 
 
 def call_llm(client, prompt, max_tokens=4096, max_retries=3):
@@ -82,9 +82,11 @@ Story premise: "{topic}"
 Write the FULL narration script IN FRENCH, first-person point of view, dramatic and emotional
 tone, with a strong hook in the FIRST sentence (something shocking or intriguing), a twist or
 revelation in the middle, and a satisfying emotional resolution at the end.
-Target length: approximately {target_words} words in French.
+Target length: approximately {target_words} words in French. THIS IS MANDATORY -- do not stop
+early. Develop the story with rich emotional detail, inner monologue, and vivid descriptions
+to reach this word count naturally.
 
-Then break the script into 6 to 10 short SCENES for illustration. For each scene provide:
+Then break the script into 10 to 15 short SCENES for illustration. For each scene provide:
 - "narration_fr": the exact portion of the French script for this scene
 - "pexels_query": a 2-4 word English search query for Pexels stock footage that visually
   matches this scene (focus on emotions and settings: e.g. "woman crying bedroom",
