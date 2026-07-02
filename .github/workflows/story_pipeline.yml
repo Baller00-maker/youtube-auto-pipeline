@@ -31,9 +31,6 @@ jobs:
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
-          STORY_YOUTUBE_CLIENT_ID: ${{ secrets.STORY_YOUTUBE_CLIENT_ID }}
-          STORY_YOUTUBE_CLIENT_SECRET: ${{ secrets.STORY_YOUTUBE_CLIENT_SECRET }}
-          STORY_YOUTUBE_REFRESH_TOKEN: ${{ secrets.STORY_YOUTUBE_REFRESH_TOKEN }}
         run: python run_story_pipeline.py
 
       - name: Sauvegarde de la vidéo (pour post manuel TikTok)
