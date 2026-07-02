@@ -14,9 +14,9 @@ import edge_tts
 SCRIPT_FILE = Path("story_script.json")
 AUDIO_OUTPUT = Path("story_narration.mp3")
 
-VOICE = "fr-FR-HenriNeural"
-RATE = "-8%"
-PITCH = "-5Hz"
+VOICE = "fr-FR-DeniseNeural"  # voix féminine française, très expressive et émotionnelle
+RATE = "-10%"  # légèrement plus lent pour maximiser l'impact dramatique
+PITCH = "+0Hz"
 
 
 async def generate_audio(text, voice, rate, pitch, audio_path):
