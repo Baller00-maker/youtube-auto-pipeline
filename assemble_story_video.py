@@ -93,7 +93,8 @@ def main():
     for entry, char_len in zip(manifest, text_lengths):
         duration = max(2.0, total_duration * (char_len / total_chars))
         clip_path = WORKDIR / f"story_clip_{entry['index']:03d}.mp4"
-        print(f"[{entry['index']+1}/{len(manifest)}] {entry['type']} | {entry['query']} | {duration:.1f}s")
+        label = entry.get("query") or entry.get("image_prompt", "scène")[:50]
+        print(f"[{entry['index']+1}/{len(manifest)}] {entry['type']} | {label} | {duration:.1f}s")
 
         ok = (make_image_clip(entry["path"], duration, clip_path)
               if entry["type"] == "image"
