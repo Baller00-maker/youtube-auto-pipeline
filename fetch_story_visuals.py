@@ -89,7 +89,7 @@ def main():
                 break
             except Exception as e:
                 print(f"  ! Tentative {attempt}/3 échouée : {e}", file=sys.stderr)
-                time.sleep(5)
+                time.sleep(15)  # délai plus long pour laisser Pollinations récupérer
 
         if not success:
             print(f"  ! Scène {i} ignorée après 3 tentatives.", file=sys.stderr)
@@ -98,11 +98,12 @@ def main():
         manifest.append({
             "index": i,
             "narration_fr": scene["narration_fr"],
+            "query": prompt[:80],
             "image_prompt": prompt,
             "type": "image",
             "path": str(dest),
         })
-        time.sleep(2)  # ménage l'API Pollinations
+        time.sleep(3)  # ménage l'API Pollinations (augmenté pour éviter les 500)
 
     if not manifest:
         print("Erreur : aucune image générée.", file=sys.stderr)
