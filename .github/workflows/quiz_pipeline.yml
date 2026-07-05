@@ -8,7 +8,7 @@ on:
 jobs:
   produce-quiz:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: write
 
@@ -21,8 +21,17 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Installation de ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+      - name: Installation de ffmpeg et polices système
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu fonts-liberation wget
+
+      - name: Téléchargement de la police Bebas Neue
+        run: |
+          mkdir -p fonts
+          wget -q -O fonts/BebasNeue.ttf \
+            "https://github.com/dharmatype/Bebas-Neue/raw/master/Fonts/BN_TTF/BebasNeue-Regular.ttf" \
+            || echo "Fallback : police système utilisée"
 
       - name: Installation des dépendances Python
         run: pip install -r requirements.txt Pillow
