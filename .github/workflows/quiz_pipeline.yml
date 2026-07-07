@@ -13,35 +13,39 @@ jobs:
       contents: write
 
     steps:
-      - name: Récupération du dépôt
+      - name: Recuperation du depot
         uses: actions/checkout@v4
 
-      - name: Installation de Python
+      - name: Installation Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Installation de ffmpeg et polices système
+      - name: Installation ffmpeg + polices
         run: |
-          sudo apt-get update
+          sudo apt-get update -qq
           sudo apt-get install -y ffmpeg fonts-dejavu fonts-liberation wget
 
-      - name: Téléchargement de la police Bebas Neue
+      - name: Telechargement Bebas Neue
         run: |
           mkdir -p fonts
+          # Essaie plusieurs sources
           wget -q -O fonts/BebasNeue.ttf \
             "https://github.com/dharmatype/Bebas-Neue/raw/master/Fonts/BN_TTF/BebasNeue-Regular.ttf" \
-            || echo "Fallback : police système utilisée"
+          || wget -q -O fonts/BebasNeue.ttf \
+            "https://raw.githubusercontent.com/googlefonts/bebasneue/main/fonts/ttf/BebasNeue-Regular.ttf" \
+          || echo "Bebas Neue non disponible, fallback systeme"
+          ls -lh fonts/ || true
 
-      - name: Installation des dépendances Python
+      - name: Installation dependances Python
         run: pip install -r requirements.txt Pillow
 
-      - name: Exécution du pipeline quiz
+      - name: Execution pipeline quiz
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
         run: python run_quiz_pipeline.py
 
-      - name: Sauvegarde de la vidéo quiz
+      - name: Sauvegarde video quiz
         uses: actions/upload-artifact@v4
         with:
           name: quiz-video-${{ github.run_number }}
