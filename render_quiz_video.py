@@ -1,19 +1,18 @@
 """
-Pipeline Quiz TikTok -- VERSION 3
-- Toutes les questions lues par la voix
-- Réponses lues après chaque question
-- Fond dynamique avec emojis thématiques semi-transparents
-- Durée cible : ~2 minutes
-- Police Bebas Neue
-- Son chronomètre pendant la réflexion
-- Une seule session asyncio pour tout le TTS (corrige le bug voix)
+Pipeline Quiz TikTok -- VERSION 4 (production-ready)
+Corrections :
+- Hook textes sans overlap (y-coords fixes)
+- Pas d'emoji dans PIL (→ rectangles sur Linux) : remplacé par formes géométriques
+- Durée ~1min35s : hook=3 + 10*(2+4+3) + 5 = 98s
+- Cards hauteur dynamique selon longueur du texte
+- Grand countdown centré visible pendant la réflexion
+- Fond avec motifs "?" semi-transparents (fiables, pas emoji)
+- Bebas Neue depuis URL fiable, fallback robuste
+- Toutes les questions ET réponses lues (asyncio.gather corrigé)
+- merge_va avec -t explicite pour durée exacte
 """
 
-import asyncio
-import json
-import subprocess
-import sys
-import tempfile
+import asyncio, json, math, subprocess, sys, tempfile
 from pathlib import Path
 
 import edge_tts
@@ -25,447 +24,476 @@ CLIPS_DIR   = Path("quiz_clips")
 AUDIO_DIR   = Path("quiz_audio")
 FONTS_DIR   = Path("fonts")
 
-WIDTH, HEIGHT = 1080, 1920
-FPS = 24
+W, H  = 1080, 1920
+FPS   = 24
 
 # Palette
-BG_TOP    = (8,   8,  35)
-BG_BOT    = (28,  8,  55)
-ACCENT    = (99, 120, 255)
-GOLD      = (255, 210,  0)
-CORRECT   = (30,  220, 120)
-WRONG_COL = (255,  65,  80)
-CARD_BG   = (20,  20,  55)
-WHITE     = (255, 255, 255)
-GRAY      = (160, 160, 180)
-TIMER_BG  = (35,  35,  70)
+BG1   = (8,   8,  35)   # top gradient
+BG2   = (28,  8,  55)   # bottom gradient
+BLUE  = (80, 110, 255)
+GOLD  = (255, 200,  0)
+GREEN = (30,  210, 110)
+RED   = (255,  60,  75)
+DARK  = (15,  15,  45)
+WHITE = (255, 255, 255)
+GRAY  = (150, 150, 175)
+CARD  = (22,  22,  58)
 
-# Timing
-HOOK_DUR  = 3
-Q_TTS_DUR = 3   # voix lit la question
-Q_TICK_DUR= 5   # chrono (réduit pour garder <2min)
-ANS_DUR   = 4   # voix lit la réponse
-CTA_DUR   = 6
+# Timing (total ≈ 98s)
+HOOK_S  = 3
+QQ_S    = 2    # voix lit la question
+TICK_S  = 4    # silence + countdown
+ANS_S   = 3    # ding + voix lit la réponse
+CTA_S   = 5
 
 VOICE = "fr-FR-HenriNeural"
 
-# Emojis par catégorie (fond dynamique)
-CATEGORY_EMOJIS = {
-    "géographie":    ["🌍","🗺️","🏔️","🌊","🧭"],
-    "histoire":      ["⚔️","🏰","📜","🎖️","👑"],
-    "sciences":      ["🔬","⚗️","🧬","🔭","💡"],
-    "animaux":       ["🦁","🐘","🦋","🐬","🦅"],
-    "sport":         ["⚽","🏆","🎾","🏊","🥇"],
-    "cinéma":        ["🎬","🎭","🍿","🎞️","⭐"],
-    "musique":       ["🎵","🎸","🎹","🎤","🎺"],
-    "gastronomie":   ["🍕","🥗","🍰","👨‍🍳","🌶️"],
-    "technologies":  ["💻","🤖","📱","🚀","⚡"],
-    "insolite":      ["🤔","❓","💫","🎲","🔮"],
-    "default":       ["❓","🧠","💡","⭐","🎯"],
+CAT_COLORS = {
+    "géographie": (0, 150, 200),
+    "histoire":   (180, 80, 0),
+    "sciences":   (0, 180, 120),
+    "animaux":    (120, 180, 0),
+    "sport":      (220, 80, 0),
+    "cinéma":     (180, 0, 120),
+    "musique":    (100, 0, 200),
+    "gastronomie":(200, 100, 0),
+    "technologies":(0, 120, 220),
+    "insolite":   (150, 0, 180),
 }
+def cat_color(cat):
+    for k,v in CAT_COLORS.items():
+        if k in cat.lower(): return v
+    return BLUE
 
+# ─── FONTS ──────────────────────────────────────────────────────────────────
 
-# ─── POLICES ────────────────────────────────────────────────────────────────
+def _try_font(path, size):
+    try: return ImageFont.truetype(str(path), size)
+    except: return None
 
 def bebas(size):
-    p = FONTS_DIR / "BebasNeue.ttf"
-    if p.exists():
-        try: return ImageFont.truetype(str(p), size)
-        except: pass
-    for fb in ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-               "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"]:
-        if Path(fb).exists():
-            try: return ImageFont.truetype(fb, size)
-            except: pass
+    for p in [FONTS_DIR/"BebasNeue.ttf",
+              Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+              Path("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf")]:
+        f = _try_font(p, size)
+        if f: return f
     return ImageFont.load_default()
 
-
-def sans(size):
-    for fb in ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-               "/usr/share/fonts/truetype/liberation/LiberationSans.ttf"]:
-        if Path(fb).exists():
-            try: return ImageFont.truetype(fb, size)
-            except: pass
+def body(size):
+    for p in [Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+              Path("/usr/share/fonts/truetype/liberation/LiberationSans.ttf")]:
+        f = _try_font(p, size)
+        if f: return f
     return ImageFont.load_default()
 
+# ─── DRAWING HELPERS ────────────────────────────────────────────────────────
 
-# ─── DESSIN ─────────────────────────────────────────────────────────────────
-
-def make_gradient():
-    img = Image.new("RGB", (WIDTH, HEIGHT))
-    for y in range(HEIGHT):
-        t = y / HEIGHT
-        r = int(BG_TOP[0]*(1-t) + BG_BOT[0]*t)
-        g = int(BG_TOP[1]*(1-t) + BG_BOT[1]*t)
-        b = int(BG_TOP[2]*(1-t) + BG_BOT[2]*t)
-        for x in range(WIDTH):
-            img.putpixel((x, y), (r, g, b))
+def gradient_image():
+    img = Image.new("RGB", (W, H))
+    for y in range(H):
+        t = y / H
+        img.paste(tuple(int(BG1[i]*(1-t)+BG2[i]*t) for i in range(3)), (0, y, W, y+1))
     return img
 
 _BG = None
-def get_bg():
+def bg(): 
     global _BG
-    if _BG is None: _BG = make_gradient()
+    if _BG is None: _BG = gradient_image()
     return _BG.copy()
 
-
-def get_category_emojis(category):
-    cat = category.lower()
-    for key, emojis in CATEGORY_EMOJIS.items():
-        if key in cat:
-            return emojis
-    return CATEGORY_EMOJIS["default"]
-
-
-def draw_dynamic_bg(category):
-    """Fond avec emojis thématiques semi-transparents."""
-    img = get_bg()
-    emojis = get_category_emojis(category)
-    # Positions fixes pour les emojis de fond
-    positions = [
-        (80, 120), (900, 200), (150, 500), (850, 600),
-        (50, 900), (950, 1000), (200, 1300), (800, 1400),
-        (100, 1700), (900, 1750), (500, 300), (500, 1100),
-        (300, 700), (700, 800), (400, 1500),
+def draw_bg_pattern(img, color):
+    """Fond avec motifs '?' semi-transparents (fiable sur Linux, pas emoji)."""
+    overlay = Image.new("RGBA", (W,H), (0,0,0,0))
+    d = ImageDraw.Draw(overlay)
+    f_big  = bebas(140)
+    f_med  = bebas(90)
+    f_sml  = bebas(55)
+    alpha  = 35  # semi-transparent
+    items = [
+        (80,  80,  f_big, "?"),  (820, 140, f_med, "?"),
+        (50,  450, f_sml, "?"),  (870, 500, f_big, "?"),
+        (200, 820, f_med, "?"),  (750, 900, f_sml, "?"),
+        (60,  1200,f_big, "?"),  (880,1150, f_med, "?"),
+        (350, 1450,f_sml, "?"),  (700,1550, f_big, "?"),
+        (150, 1700,f_med, "?"),  (820,1750, f_sml, "?"),
     ]
-    overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    draw_o = ImageDraw.Draw(overlay)
-    ef = bebas(90)
-    for i, (x, y) in enumerate(positions):
-        emoji = emojis[i % len(emojis)]
-        draw_o.text((x, y), emoji, font=ef, fill=(255, 255, 255, 28))
-    # Convertit overlay et compose
-    img_rgba = img.convert("RGBA")
-    img_rgba = Image.alpha_composite(img_rgba, overlay)
-    return img_rgba.convert("RGB")
+    c = (*color, alpha)
+    for x,y,f,txt in items:
+        d.text((x,y), txt, font=f, fill=c)
+    base = img.convert("RGBA")
+    out  = Image.alpha_composite(base, overlay)
+    return out.convert("RGB")
 
+def measure(draw, text, font):
+    bb = draw.textbbox((0,0), text, font=font)
+    return bb[2]-bb[0], bb[3]-bb[1]
 
-def centered(draw, text, y, font, color, max_w=960, gap=10):
+def put_centered(draw, text, y, font, color, max_w=960, gap=6):
+    """Affiche texte multi-ligne centré, retourne hauteur totale."""
     words = text.split()
     lines, cur = [], ""
     for w in words:
-        test = (cur+" "+w).strip()
-        bb = draw.textbbox((0,0), test, font=font)
-        if bb[2]-bb[0] <= max_w: cur = test
+        t = (cur+" "+w).strip()
+        ww,_ = measure(draw, t, font)
+        if ww <= max_w: cur = t
         else:
             if cur: lines.append(cur)
             cur = w
     if cur: lines.append(cur)
     lh = font.size + gap
-    for i, line in enumerate(lines):
-        bb = draw.textbbox((0,0), line, font=font)
-        x = (WIDTH-(bb[2]-bb[0]))//2
-        draw.text((x, y+i*lh), line, font=font, fill=color)
+    for i,line in enumerate(lines):
+        ww,_ = measure(draw, line, font)
+        draw.text(((W-ww)//2, y+i*lh), line, font=font, fill=color)
     return len(lines)*lh
 
+def card_text_height(draw, text, font, max_w=800):
+    """Hauteur nécessaire pour afficher le texte dans la carte."""
+    words = text.split()
+    lines, cur = [], ""
+    for w in words:
+        t = (cur+" "+w).strip()
+        ww,_ = measure(draw, t, font)
+        if ww <= max_w: cur = t
+        else:
+            if cur: lines.append(cur)
+            cur = w
+    if cur: lines.append(cur)
+    _,lh = measure(draw, "Ag", font)
+    return max(1, len(lines)) * (lh+6)
 
-def draw_card(draw, letter, text, x, y, w, h, state="normal"):
-    c = {
-        "normal":  (CARD_BG,       ACCENT,    ACCENT,    WHITE),
-        "correct": ((15,60,35),    CORRECT,   CORRECT,   CORRECT),
-        "wrong":   ((55,12,18),    WRONG_COL, WRONG_COL, GRAY),
-    }.get(state, (CARD_BG, ACCENT, ACCENT, WHITE))
-    bg, border, badge, txt = c
-    draw.rounded_rectangle([x,y,x+w,y+h], radius=22, fill=bg)
-    draw.rounded_rectangle([x,y,x+w,y+h], radius=22, outline=border, width=3)
+def draw_choice(draw, letter, text, x, y, w, state="normal"):
+    """Carte choix avec hauteur dynamique."""
+    tf = body(36)
+    th = card_text_height(draw, text, tf, max_w=w-120)
+    h  = max(90, th + 36)
+    c  = {
+        "normal":  (CARD,         BLUE,  BLUE,  WHITE),
+        "correct": ((12,50,30),   GREEN, GREEN, GREEN),
+        "wrong":   ((50,10,15),   RED,   RED,   GRAY),
+    }.get(state, (CARD, BLUE, BLUE, WHITE))
+    bg_c, border, badge, txt = c
+    draw.rounded_rectangle([x,y,x+w,y+h], radius=20, fill=bg_c)
+    draw.rounded_rectangle([x,y,x+w,y+h], radius=20, outline=border, width=3)
     bs = h-16
     draw.rounded_rectangle([x+8,y+8,x+8+bs,y+h-8], radius=12, fill=badge)
-    lf = bebas(46)
-    lb = draw.textbbox((0,0), letter, font=lf)
-    draw.text((x+8+(bs-(lb[2]-lb[0]))//2, y+8+(bs-(lb[3]-lb[1]))//2),
-              letter, font=lf, fill=(10,10,30))
-    tf = sans(34)
-    tb = draw.textbbox((0,0), text, font=tf)
-    draw.text((x+bs+24, y+(h-(tb[3]-tb[1]))//2), text, font=tf, fill=txt)
+    lf  = bebas(min(bs-4, 50))
+    lw,lhh = measure(draw, letter, lf)
+    draw.text((x+8+(bs-lw)//2, y+8+(bs-lhh)//2), letter, font=lf, fill=(10,10,30))
+    # texte choix (multiline)
+    words = text.split()
+    lines, cur = [], ""
+    for w2 in words:
+        t = (cur+" "+w2).strip()
+        ww,_ = measure(draw, t, tf)
+        if ww <= w-120: cur = t
+        else:
+            if cur: lines.append(cur)
+            cur = w2
+    if cur: lines.append(cur)
+    _,llh = measure(draw, "Ag", tf)
+    total_th = len(lines)*(llh+6)
+    ty = y + (h-total_th)//2
+    for line in lines:
+        draw.text((x+bs+24, ty), line, font=tf, fill=txt)
+        ty += llh+6
+    return h
 
-
-def draw_timer_arc(draw, cx, cy, r, progress, thick=12):
-    draw.ellipse([cx-r,cy-r,cx+r,cy+r], outline=TIMER_BG, width=thick)
-    if progress > 0.01:
-        col = CORRECT if progress > 0.5 else (GOLD if progress > 0.25 else WRONG_COL)
-        end = -90 + progress*360
-        draw.arc([cx-r,cy-r,cx+r,cy+r], start=-90, end=end, fill=col, width=thick)
-
+def arc_progress(draw, cx, cy, r, prog, thick=14, col=GREEN):
+    draw.ellipse([cx-r,cy-r,cx+r,cy+r], outline=(35,35,70), width=thick)
+    if prog > 0.01:
+        draw.arc([cx-r,cy-r,cx+r,cy+r], start=-90, end=-90+prog*360, fill=col, width=thick)
 
 # ─── FRAMES ─────────────────────────────────────────────────────────────────
 
-def hook_frame(title):
-    img = get_bg()
+def make_hook(title):
+    img = bg()
     draw = ImageDraw.Draw(img)
-    draw.rectangle([0,0,WIDTH,8], fill=ACCENT)
-    centered(draw, "🧠", HEIGHT//2-320, bebas(130), WHITE)
-    centered(draw, "SEULS 5% RÉUSSISSENT", HEIGHT//2-180, bebas(100), GOLD)
-    centered(draw, "ces 10 questions !", HEIGHT//2-60, sans(52), WHITE)
-    centered(draw, "Vas-tu y arriver ? 👇", HEIGHT//2+20, sans(46), GRAY)
-    draw.rounded_rectangle([200,HEIGHT//2+140,WIDTH-200,HEIGHT//2+240], radius=28, fill=ACCENT)
-    centered(draw, "C'EST PARTI ! 🚀", HEIGHT//2+158, bebas(62), WHITE)
+    # Bande accent
+    draw.rectangle([0,0,W,10], fill=BLUE)
+    draw.rectangle([0,H-10,W,H], fill=BLUE)
+    # Titre gros
+    f1 = bebas(118)
+    y = 280
+    y += put_centered(draw, "SEULS 5% REUSSISSENT", y, f1, GOLD) + 20
+    f2 = body(50)
+    y += put_centered(draw, "ces 10 questions !", y, f2, WHITE) + 30
+    put_centered(draw, "Peux-tu relever le defi ?", y, f2, GRAY)
+    # Bouton
+    bx1,by1,bx2,by2 = 180, H//2+180, W-180, H//2+290
+    draw.rounded_rectangle([bx1,by1,bx2,by2], radius=30, fill=BLUE)
+    bf = bebas(68)
+    put_centered(draw, "C'EST PARTI !", by1+18, bf, WHITE)
     return img
 
 
-def question_frame(n, q, countdown_prog):
-    """Frame question avec fond dynamique thématique."""
-    img = draw_dynamic_bg(q.get("category",""))
+def make_question(n, q, countdown_prog, phase="think"):
+    """
+    phase='read'  : voix lit la question, pas de countdown visible
+    phase='think' : silence, grand countdown centré
+    """
+    color = cat_color(q.get("category",""))
+    img = draw_bg_pattern(bg(), color)
     draw = ImageDraw.Draw(img)
+
     # Header
-    draw.rectangle([0,0,WIDTH,105], fill=(12,12,45,220))
-    draw.text((45,22), f"QUESTION {n}/10", font=bebas(58), fill=ACCENT)
-    # Timer cercle
-    cx,cy,r = WIDTH-88, 58, 46
-    draw_timer_arc(draw, cx, cy, r, countdown_prog, thick=10)
-    secs = max(1, int(countdown_prog * Q_TICK_DUR)+1)
-    nf = bebas(48)
-    nb = draw.textbbox((0,0), str(secs), font=nf)
-    draw.text((cx-(nb[2]-nb[0])//2, cy-(nb[3]-nb[1])//2), str(secs), font=nf, fill=WHITE)
+    draw.rectangle([0,0,W,110], fill=(*DARK, 220))
+    draw.text((44,20), f"QUESTION {n}/10", font=bebas(60), fill=(*BLUE,))
     # Catégorie
-    centered(draw, f"▸ {q.get('category','').upper()}", 120, sans(32), GOLD)
+    cf = body(32)
+    put_centered(draw, q.get("category","").upper(), 122, cf, (*color,))
     # Question
-    qf = bebas(82)
-    qh = centered(draw, q["question"].upper(), 180, qf, WHITE, max_w=960)
-    # Choix
+    qf = bebas(80)
+    qh = put_centered(draw, q["question"].upper(), 178, qf, WHITE, max_w=970)
+    # Cards
     letters = ["A","B","C","D"]
-    ch, cg = 108, 16
-    sy = 200+qh
-    for i,l in enumerate(letters):
-        draw_card(draw, l, q["choices"][l], 44, sy+i*(ch+cg), WIDTH-88, ch)
-    # Bas
-    centered(draw, "⏱  Quelle est ta réponse ?", sy+4*(ch+cg)+18, sans(38), GRAY)
+    cy_c = 200 + qh
+    gap  = 14
+    card_w = W - 88
+    for l in letters:
+        ch = draw_choice(draw, l, q["choices"][l], 44, cy_c, card_w, "normal")
+        cy_c += ch + gap
+
+    if phase == "think":
+        # Grand countdown centré en bas
+        secs = max(1, int(countdown_prog * TICK_S) + 1)
+        cx_c = W//2
+        cy_big = cy_c + 60
+        r_big = 90
+        prog_col = GREEN if countdown_prog > 0.5 else (GOLD if countdown_prog > 0.25 else RED)
+        arc_progress(draw, cx_c, cy_big+r_big, r_big, countdown_prog, thick=16, col=prog_col)
+        nf = bebas(120)
+        ns = str(secs)
+        nw,nh = measure(draw, ns, nf)
+        draw.text((cx_c - nw//2, cy_big + r_big - nh//2), ns, font=nf, fill=prog_col)
+        # "Reflechis !" en dessous
+        pf = body(38)
+        put_centered(draw, "Reflechis !", cy_big + 2*r_big + 20, pf, GRAY)
     return img
 
 
-def answer_frame(n, q):
-    img = draw_dynamic_bg(q.get("category",""))
+def make_answer(n, q):
+    color = cat_color(q.get("category",""))
+    img = draw_bg_pattern(bg(), color)
     draw = ImageDraw.Draw(img)
     correct = q["correct"]
-    draw.rectangle([0,0,WIDTH,105], fill=(12,50,28))
-    draw.text((45,22), f"✅  RÉPONSE — Q{n}/10", font=bebas(58), fill=CORRECT)
-    centered(draw, f"▸ {q.get('category','').upper()}", 120, sans(32), GOLD)
-    qh = centered(draw, q["question"].upper(), 178, bebas(68), WHITE, max_w=960)
+    # Header vert
+    draw.rectangle([0,0,W,110], fill=(12,55,30))
+    draw.text((44,20), f"REPONSE  Q{n}/10", font=bebas(60), fill=GREEN)
+    put_centered(draw, q.get("category","").upper(), 122, body(32), (*color,))
+    qh = put_centered(draw, q["question"].upper(), 178, bebas(72), WHITE, max_w=970)
     letters = ["A","B","C","D"]
-    ch, cg = 108, 14
-    sy = 200+qh
-    for i,l in enumerate(letters):
+    cy_c = 200 + qh
+    gap  = 12
+    card_w = W - 88
+    for l in letters:
         state = "correct" if l==correct else "wrong"
-        draw_card(draw, l, q["choices"][l], 44, sy+i*(ch+cg), WIDTH-88, ch, state)
+        ch = draw_choice(draw, l, q["choices"][l], 44, cy_c, card_w, state)
+        cy_c += ch + gap
+    # Explication
     if q.get("explanation"):
-        ey = sy+4*(ch+cg)+20
-        draw.rounded_rectangle([40,ey,WIDTH-40,ey+100], radius=18, fill=(12,50,28))
-        draw.rounded_rectangle([40,ey,WIDTH-40,ey+100], radius=18, outline=CORRECT, width=2)
-        centered(draw, f"💡  {q['explanation']}", ey+16, sans(34), CORRECT, max_w=940)
+        ey = cy_c + 16
+        draw.rounded_rectangle([40,ey,W-40,ey+95], radius=18, fill=(12,55,30))
+        draw.rounded_rectangle([40,ey,W-40,ey+95], radius=18, outline=GREEN, width=2)
+        put_centered(draw, q["explanation"], ey+14, body(33), GREEN, max_w=950)
     return img
 
 
-def cta_frame():
-    img = get_bg()
+def make_cta():
+    img = bg()
     draw = ImageDraw.Draw(img)
-    centered(draw, "TU AS AIMÉ ? 🎉", 180, bebas(96), GOLD)
-    centered(draw, "Soutiens-nous :", 300, sans(46), WHITE)
-    items = [("❤️","Like la vidéo",WRONG_COL),("➕","Abonne-toi",ACCENT),
-             ("↗️","Partage à tes amis",CORRECT),("💬","Ton score en commentaire",GOLD)]
-    for i,(em,txt,col) in enumerate(items):
-        y = 400+i*148
-        draw.rounded_rectangle([50,y,WIDTH-50,y+122], radius=26, fill=col)
-        draw.text((88,y+24), em, font=bebas(64), fill=WHITE)
-        draw.text((190,y+30), txt, font=bebas(60), fill=WHITE)
-    centered(draw, "🏆  Dis ton score /10 en commentaire !", HEIGHT-140, sans(42), GRAY)
+    put_centered(draw, "TU AS AIME ?", 200, bebas(100), GOLD)
+    put_centered(draw, "Soutiens-nous :", 330, body(46), WHITE)
+    items = [
+        ("Like la video",         RED),
+        ("Abonne-toi",            BLUE),
+        ("Partage a tes amis",    GREEN),
+        ("Score en commentaire",  GOLD),
+    ]
+    for i,(txt,col) in enumerate(items):
+        y = 430 + i*148
+        draw.rounded_rectangle([50,y,W-50,y+120], radius=26, fill=col)
+        tf = bebas(62)
+        put_centered(draw, txt, y+22, tf, WHITE)
+    put_centered(draw, "Dis ton score /10 en commentaire !", H-140, body(40), GRAY)
     return img
-
 
 # ─── AUDIO ──────────────────────────────────────────────────────────────────
 
-async def generate_all_tts(quiz):
-    """Génère TOUS les fichiers TTS en une seule session async — corrige le bug voix."""
-    tasks = []
-
+async def all_tts(quiz):
     async def save(text, path):
-        comm = edge_tts.Communicate(text, VOICE, rate="+5%")
-        await comm.save(str(path))
+        try:
+            c = edge_tts.Communicate(text, VOICE, rate="+5%")
+            await c.save(str(path))
+        except Exception as e:
+            print(f"  ! TTS erreur ({path.name}): {e}", file=sys.stderr)
 
-    # Hook
-    tasks.append(save(
-        "Attention ! Seuls 5% des gens répondent correctement à ces 10 questions. Peux-tu relever le défi ?",
+    tasks  = [save(
+        "Attention ! Seuls 5 pourcents des gens repondent a ces 10 questions. Peux-tu relever le defi ?",
         AUDIO_DIR/"hook.mp3"
-    ))
-    # CTA
-    tasks.append(save(
-        "Tu as aimé ce quiz ? Like la vidéo, abonne-toi, partage avec tes amis, et dis-nous ton score en commentaire !",
+    )]
+    tasks += [save(
+        "Tu as aime ce quiz ? Like la video, abonne-toi, partage avec tes amis et dis ton score en commentaire !",
         AUDIO_DIR/"cta.mp3"
-    ))
-    # Questions et réponses
-    for i, q in enumerate(quiz["questions"]):
+    )]
+    for i,q in enumerate(quiz["questions"]):
         n = i+1
         tasks.append(save(q["question"], AUDIO_DIR/f"q{n:02d}_q.mp3"))
-        correct_text = f"La réponse est {q['correct']} : {q['choices'][q['correct']]}. {q.get('explanation','')}"
-        tasks.append(save(correct_text, AUDIO_DIR/f"q{n:02d}_ans.mp3"))
-
+        ans = f"La reponse est {q['correct']} : {q['choices'][q['correct']]}. {q.get('explanation','')}"
+        tasks.append(save(ans, AUDIO_DIR/f"q{n:02d}_ans.mp3"))
     await asyncio.gather(*tasks)
-    print(f"  ✓ {len(tasks)} fichiers TTS générés")
+    print(f"  TTS OK : {len(tasks)} fichiers")
 
+def gen_ding(out):
+    subprocess.run(["ffmpeg","-y","-f","lavfi","-i","sine=frequency=880:duration=0.45",
+                    "-af","volume=0.85,afade=t=out:st=0.38:d=0.07",str(out)],
+                   capture_output=True, check=False)
 
-def gen_tick(path, duration):
+def gen_tick(out, dur):
     tmp = Path(tempfile.mkdtemp())
-    tick = tmp/"t.mp3"
-    sil  = tmp/"s.mp3"
-    cyc  = tmp/"c.mp3"
-    # Tick court
-    subprocess.run(["ffmpeg","-y","-f","lavfi","-i","sine=frequency=900:duration=0.03",
-                    "-af","volume=0.5",str(tick)], capture_output=True)
-    # Silence
+    tick = tmp/"tk.mp3"
+    sil  = tmp/"sl.mp3"
+    cyc  = tmp/"cy.mp3"
+    subprocess.run(["ffmpeg","-y","-f","lavfi","-i","sine=frequency=900:duration=0.028",
+                    "-af","volume=0.45",str(tick)], capture_output=True, check=False)
     subprocess.run(["ffmpeg","-y","-f","lavfi","-i","anullsrc=r=44100:cl=stereo",
-                    "-t","0.47",str(sil)], capture_output=True)
-    # Cycle
-    lst = tmp/"l.txt"
-    lst.write_text(f"file '{tick.resolve()}'\nfile '{sil.resolve()}'\n")
-    subprocess.run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(lst),"-c","copy",str(cyc)],
-                   capture_output=True)
-    # Répéter
-    n = int(duration/0.5)+3
+                    "-t","0.472",str(sil)], capture_output=True, check=False)
+    lst1 = tmp/"l1.txt"
+    lst1.write_text(f"file '{tick.resolve()}'\nfile '{sil.resolve()}'\n")
+    subprocess.run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(lst1),
+                    "-c","copy",str(cyc)], capture_output=True, check=False)
+    n = int(dur/0.5)+4
     lst2 = tmp/"l2.txt"
     lst2.write_text(f"file '{cyc.resolve()}'\n"*n)
     subprocess.run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(lst2),
-                    "-t",str(duration),str(path)], capture_output=True)
+                    "-t",str(dur),str(out)], capture_output=True, check=False)
 
-
-def gen_ding(path):
-    subprocess.run(["ffmpeg","-y","-f","lavfi","-i","sine=frequency=880:duration=0.5",
-                    "-af","volume=0.8,afade=t=out:st=0.42:d=0.08",str(path)],
-                   capture_output=True)
-
-
-def gen_silence(path, dur):
+def gen_silence(out, dur):
     subprocess.run(["ffmpeg","-y","-f","lavfi","-i","anullsrc=r=44100:cl=stereo",
-                    "-t",str(dur),str(path)], capture_output=True)
+                    "-t",str(dur),str(out)], capture_output=True, check=False)
 
-
-def mix_ding_tts(ding, tts_a, output):
+def mix_ding_tts(ding, tts_a, out):
     subprocess.run([
         "ffmpeg","-y","-i",str(ding),"-i",str(tts_a),
-        "-filter_complex","[0:a][1:a]amix=inputs=2:duration=longest[a]",
-        "-map","[a]",str(output)
-    ], capture_output=True)
+        "-filter_complex","[0:a][1:a]amix=inputs=2:duration=longest:normalize=0[a]",
+        "-map","[a]",str(out)
+    ], capture_output=True, check=False)
 
-
-# ─── CLIPS ──────────────────────────────────────────────────────────────────
+# ─── VIDEO HELPERS ──────────────────────────────────────────────────────────
 
 def still_clip(frame, dur, out):
     tmp = Path(tempfile.mktemp(suffix=".png"))
     frame.save(tmp)
-    subprocess.run(["ffmpeg","-y","-loop","1","-i",str(tmp),
-                    "-t",str(dur),"-vf",f"fps={FPS}",
-                    "-c:v","libx264","-pix_fmt","yuv420p",str(out)],
-                   capture_output=True)
+    subprocess.run([
+        "ffmpeg","-y","-loop","1","-i",str(tmp),
+        "-t",str(dur),"-vf",f"fps={FPS}",
+        "-c:v","libx264","-pix_fmt","yuv420p","-preset","fast",str(out)
+    ], capture_output=True, check=False)
 
-
-def animated_clip(frames, out):
+def anim_clip(frames_list, out):
+    """Liste de (frame_PIL, nb_repetitions)."""
     tmp = Path(tempfile.mkdtemp())
-    for i,f in enumerate(frames): f.save(tmp/f"f{i:04d}.png")
-    subprocess.run(["ffmpeg","-y","-framerate",str(FPS),"-i",str(tmp/"f%04d.png"),
-                    "-c:v","libx264","-pix_fmt","yuv420p",str(out)],
-                   capture_output=True)
+    idx = 0
+    for frame, reps in frames_list:
+        p = tmp/f"f{idx:04d}.png"
+        frame.save(p)
+        for _ in range(reps-1):
+            import shutil
+            idx2 = idx+1
+            shutil.copy(p, tmp/f"f{idx2:04d}.png")
+            idx = idx2
+        idx += 1
+    subprocess.run([
+        "ffmpeg","-y","-framerate",str(FPS),"-i",str(tmp/"f%04d.png"),
+        "-c:v","libx264","-pix_fmt","yuv420p","-preset","fast",str(out)
+    ], capture_output=True, check=False)
 
-
-def merge_va(video, audio, out, dur=None):
-    args = ["ffmpeg","-y","-i",str(video),"-i",str(audio)]
-    if dur: args += ["-t",str(dur)]
-    args += ["-c:v","copy","-c:a","aac","-shortest",str(out)]
-    subprocess.run(args, capture_output=True)
-
+def merge_va(video, audio, out, dur):
+    """Merge avec durée explicite pour éviter les clips trop longs."""
+    subprocess.run([
+        "ffmpeg","-y","-i",str(video),"-i",str(audio),
+        "-t",str(dur),"-c:v","copy","-c:a","aac",str(out)
+    ], capture_output=True, check=False)
 
 def concat(paths, out):
     lst = Path(tempfile.mktemp(suffix=".txt"))
     lst.write_text("".join(f"file '{Path(p).resolve().as_posix()}'\n" for p in paths))
-    subprocess.run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(lst),
-                    "-c","copy",str(out)], capture_output=True)
-
+    subprocess.run([
+        "ffmpeg","-y","-f","concat","-safe","0","-i",str(lst),
+        "-c","copy",str(out)
+    ], capture_output=True, check=False)
 
 # ─── MAIN ───────────────────────────────────────────────────────────────────
 
 def main():
     if not QUIZ_FILE.exists():
-        print(f"Erreur : {QUIZ_FILE} introuvable.", file=sys.stderr)
-        sys.exit(1)
-
+        print(f"Erreur : {QUIZ_FILE} introuvable.", file=sys.stderr); sys.exit(1)
     with open(QUIZ_FILE, encoding="utf-8") as f:
         quiz = json.load(f)
 
     CLIPS_DIR.mkdir(exist_ok=True)
     AUDIO_DIR.mkdir(exist_ok=True)
 
-    # 1. Générer TOUT le TTS en une seule session (corrige bug voix)
-    print("Génération TTS (toutes questions + réponses)...")
-    asyncio.run(generate_all_tts(quiz))
+    # 1. TOUT le TTS en une seule session asyncio
+    print("Generation TTS (toutes questions + reponses en parallele)...")
+    asyncio.run(all_tts(quiz))
 
     # 2. Effets sonores
     print("Effets sonores...")
-    ding = AUDIO_DIR/"ding.mp3"
-    gen_ding(ding)
-    tick = AUDIO_DIR/"tick_base.mp3"
-    gen_tick(tick, Q_TICK_DUR)
+    ding_path = AUDIO_DIR/"ding.mp3"
+    tick_path = AUDIO_DIR/"tick.mp3"
+    gen_ding(ding_path)
+    gen_tick(tick_path, TICK_S)
 
     all_clips = []
 
     # 3. Hook
     print("Hook...")
-    hv = CLIPS_DIR/"hook.mp4"
-    still_clip(hook_frame(quiz["title"]), HOOK_DUR, hv)
-    hf = CLIPS_DIR/"hook_final.mp4"
-    merge_va(hv, AUDIO_DIR/"hook.mp3", hf, HOOK_DUR)
+    hv = CLIPS_DIR/"hook.mp4";  still_clip(make_hook(quiz["title"]), HOOK_S, hv)
+    hf = CLIPS_DIR/"hook_f.mp4"; merge_va(hv, AUDIO_DIR/"hook.mp3", hf, HOOK_S)
     all_clips.append(hf)
 
     # 4. Questions
     for i, q in enumerate(quiz["questions"]):
         n = i+1
-        print(f"Q{n}/10 : {q['question'][:45]}...")
+        print(f"Q{n}/10 '{q['question'][:40]}...'")
 
-        # Phase A : TTS lit la question (fond statique, pas de timer)
-        qa_frame = question_frame(n, q, 1.0)
-        qa_v = CLIPS_DIR/f"q{n:02d}_a.mp4"
-        still_clip(qa_frame, Q_TTS_DUR, qa_v)
-        qa_f = CLIPS_DIR/f"q{n:02d}_a_final.mp4"
-        merge_va(qa_v, AUDIO_DIR/f"q{n:02d}_q.mp3", qa_f, Q_TTS_DUR)
+        # Phase A : voix lit la question (image statique)
+        qa_v = CLIPS_DIR/f"q{n:02d}a.mp4"; still_clip(make_question(n,q,1.0,"read"), QQ_S, qa_v)
+        qa_f = CLIPS_DIR/f"q{n:02d}af.mp4"; merge_va(qa_v, AUDIO_DIR/f"q{n:02d}_q.mp3", qa_f, QQ_S)
 
-        # Phase B : countdown animé + tick (SILENCE — l'utilisateur réfléchit)
-        total_f = int(Q_TICK_DUR * FPS)
-        frames = []
-        step = max(1, total_f // 30)  # max 30 frames uniques pour la vitesse
-        for j in range(0, total_f, step):
-            prog = 1.0 - (j / total_f)
-            frames += [question_frame(n, q, prog)] * step
-        frames = frames[:total_f]
-        qb_v = CLIPS_DIR/f"q{n:02d}_b.mp4"
-        animated_clip(frames, qb_v)
-        qb_f = CLIPS_DIR/f"q{n:02d}_b_final.mp4"
-        merge_va(qb_v, tick, qb_f, Q_TICK_DUR)
+        # Phase B : countdown animé + tic (SILENCE)
+        total_fr = TICK_S * FPS
+        steps    = 20  # 20 frames uniques max
+        frame_list = []
+        for s in range(steps):
+            prog  = 1.0 - s/steps
+            reps  = total_fr // steps + (1 if s < total_fr % steps else 0)
+            frame_list.append((make_question(n, q, prog, "think"), reps))
+        qb_v = CLIPS_DIR/f"q{n:02d}b.mp4"; anim_clip(frame_list, qb_v)
+        qb_f = CLIPS_DIR/f"q{n:02d}bf.mp4"; merge_va(qb_v, tick_path, qb_f, TICK_S)
 
-        # Phase C : réponse (ding + TTS lit la réponse)
-        ans_f_img = answer_frame(n, q)
-        qc_v = CLIPS_DIR/f"q{n:02d}_c.mp4"
-        still_clip(ans_f_img, ANS_DUR, qc_v)
-        qc_mixed = AUDIO_DIR/f"q{n:02d}_c_mixed.mp3"
-        mix_ding_tts(ding, AUDIO_DIR/f"q{n:02d}_ans.mp3", qc_mixed)
-        qc_f = CLIPS_DIR/f"q{n:02d}_c_final.mp4"
-        merge_va(qc_v, qc_mixed, qc_f, ANS_DUR)
+        # Phase C : réponse (ding + voix)
+        qc_v = CLIPS_DIR/f"q{n:02d}c.mp4"; still_clip(make_answer(n,q), ANS_S, qc_v)
+        qc_m = AUDIO_DIR/f"q{n:02d}cm.mp3"; mix_ding_tts(ding_path, AUDIO_DIR/f"q{n:02d}_ans.mp3", qc_m)
+        qc_f = CLIPS_DIR/f"q{n:02d}cf.mp4"; merge_va(qc_v, qc_m, qc_f, ANS_S)
 
-        # Assemblage question
-        qfull = CLIPS_DIR/f"q{n:02d}_full.mp4"
-        concat([qa_f, qb_f, qc_f], qfull)
+        # Assemblage question complète
+        qfull = CLIPS_DIR/f"q{n:02d}_full.mp4"; concat([qa_f, qb_f, qc_f], qfull)
         all_clips.append(qfull)
-        print(f"  ✓ Q{n}")
+        print(f"  Q{n} OK")
 
     # 5. CTA
     print("CTA...")
-    cv = CLIPS_DIR/"cta.mp4"
-    still_clip(cta_frame(), CTA_DUR, cv)
-    cf = CLIPS_DIR/"cta_final.mp4"
-    merge_va(cv, AUDIO_DIR/"cta.mp3", cf, CTA_DUR)
+    cv = CLIPS_DIR/"cta.mp4";  still_clip(make_cta(), CTA_S, cv)
+    cf = CLIPS_DIR/"cta_f.mp4"; merge_va(cv, AUDIO_DIR/"cta.mp3", cf, CTA_S)
     all_clips.append(cf)
 
-    # 6. Final
+    # 6. Assemblage final
     print("Assemblage final...")
     concat(all_clips, OUTPUT_FILE)
-    total = HOOK_DUR + 10*(Q_TTS_DUR+Q_TICK_DUR+ANS_DUR) + CTA_DUR
-    print(f"\n✅ {OUTPUT_FILE}")
-    print(f"   Durée estimée : {total}s (~{total//60}m{total%60:02d}s)")
-
+    total = HOOK_S + 10*(QQ_S+TICK_S+ANS_S) + CTA_S
+    print(f"\nDone: {OUTPUT_FILE}")
+    print(f"Duree estimee : {total}s (~{total//60}m{total%60:02d}s)")
 
 if __name__ == "__main__":
     main()
