@@ -1,0 +1,48 @@
+name: Daily Scenery Pipeline
+
+on:
+  schedule:
+    - cron: "0 14 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  produce-scenery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    steps:
+      - name: Recuperation du depot
+        uses: actions/checkout@v4
+
+      - name: Installation Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installation ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+
+      - name: Installation dependances Python
+        run: pip install -r requirements.txt
+
+      - name: Execution pipeline paysages/espace
+        env:
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+        run: python run_scenery_pipeline.py
+
+      - name: Sauvegarde video
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenery-video-${{ github.run_number }}
+          path: scenery_final.mp4
+          retention-days: 7
+
+      - name: Sauvegarde theme utilise
+        run: |
+          git config user.name "pipeline-bot"
+          git config user.email "pipeline-bot@users.noreply.github.com"
+          git add scenery_last_theme.txt
+          git diff --staged --quiet || git commit -m "Mise a jour theme scenery [skip ci]"
+          git push
