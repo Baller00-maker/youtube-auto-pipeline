@@ -1,0 +1,38 @@
+name: Daily Quran Video
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  produce-quran-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Recuperation du depot
+        uses: actions/checkout@v4
+
+      - name: Installation Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installation ffmpeg + polices
+        run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg fonts-dejavu
+
+      - name: Installation dependances Python
+        run: pip install -r requirements.txt Pillow
+
+      - name: Execution pipeline complet
+        env:
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+        run: python run_quran_video_pipeline.py
+
+      - name: Sauvegarde video finale
+        uses: actions/upload-artifact@v4
+        with:
+          name: quran-video-${{ github.run_number }}
+          path: quran_video.mp4
+          retention-days: 7
