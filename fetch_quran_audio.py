@@ -21,9 +21,9 @@ import time
 import urllib.request
 from pathlib import Path
 
-OUTPUT_FILE  = Path("quran_recitation.mp3")
-TEMP_DIR     = Path("quran_temp")
-TARGET_DUR   = 75   # secondes minimum
+OUTPUT_FILE     = Path("quran_recitation.mp3")
+TEMP_DIR        = Path("quran_temp")
+TARGET_DURATION = 75   # secondes minimum  (FIX: renommé depuis TARGET_DUR pour matcher les usages plus bas)
 
 # Récitateurs connus pour leur voix douce et apaisante
 # Format : (identifiant everyayah, nom affichage, qualité)
@@ -191,6 +191,16 @@ def main():
     print(f"Durée : {final_dur:.1f}s ({int(final_dur)//60}m{int(final_dur)%60:02d}s)")
     print(f"Récitateur : {reciter_name}")
     print(f"Sourate : {surah_name} (versets {start_ayah}-{min(end_ayah, start_ayah+len(downloaded)-1)})")
+
+    # Sauvegarde des métadonnées pour l'étape vidéo (utilisées par produce_quran_video.py)
+    meta = {
+        "surah_name": surah_name,
+        "reciter_name": reciter_name,
+        "surah_num": surah_num,
+        "start_ayah": start_ayah,
+        "end_ayah": end_ayah,
+    }
+    Path("quran_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
