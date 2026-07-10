@@ -17,7 +17,21 @@ jobs:
         with:
           python-version: "3.11"
       - name: Installation ffmpeg + polices
-        run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg fonts-dejavu
+        timeout-minutes: 6
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu
+          else
+            echo "ffmpeg deja present : $(ffmpeg -version | head -1)"
+            # fonts-dejavu est presque toujours deja present sur ubuntu-latest,
+            # mais on s'assure que la police existe (utilisee pour la carte de titre)
+            if [ ! -f /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf ] && \
+               [ ! -f /usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf ]; then
+              sudo apt-get update -qq
+              sudo apt-get install -y --no-install-recommends fonts-dejavu
+            fi
+          fi
       - name: Installation dependances Python
         run: pip install -r requirements.txt Pillow
       - name: Execution pipeline complet
