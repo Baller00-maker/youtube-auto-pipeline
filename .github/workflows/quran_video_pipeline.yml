@@ -3,6 +3,8 @@ on:
   schedule:
     - cron: "0 5 * * *"
   workflow_dispatch: {}
+permissions:
+  contents: write   # nécessaire pour commiter quran_history.json (mémoire anti-répétition)
 jobs:
   produce-quran-video:
     runs-on: ubuntu-latest
@@ -29,3 +31,10 @@ jobs:
           name: quran-video-${{ github.run_number }}
           path: quran_video.mp4
           retention-days: 7
+      - name: Commit de l'historique (anti-repetition sourate/reciteur)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add quran_history.json
+          git diff --staged --quiet || git commit -m "Mise a jour historique recitation [skip ci]"
+          git push
