@@ -393,8 +393,10 @@ def overlay_caption(video_path, overlay_png, output):
 def final_mux(video_path, audio_path, audio_duration, output):
     """
     Fusion vidéo + audio ORIGINAL (aucun filtre). La vidéo est garantie
-    >= audio_duration (voir pad_to_duration), donc -shortest ne coupera
-    jamais l'audio -- seulement l'éventuel excédent vidéo.
+    >= audio_duration (voir pad_to_duration). On coupe explicitement à
+    -t audio_duration (plus fiable que -shortest avec -c:v copy, qui peut
+    laisser dépasser la vidéo de quelques images/secondes) : l'audio n'est
+    donc jamais tronqué, et la vidéo se termine pile à la fin de l'audio.
     """
     return run([
         "ffmpeg", "-y",
@@ -402,7 +404,7 @@ def final_mux(video_path, audio_path, audio_duration, output):
         "-i", str(audio_path),
         "-c:v", "copy",
         "-c:a", "aac", "-b:a", "256k",
-        "-shortest",
+        "-t", f"{audio_duration:.3f}",
         str(output)
     ], "Fusion finale vidéo + audio original (non retouché)")
 
