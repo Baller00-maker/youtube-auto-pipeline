@@ -21,6 +21,7 @@ jobs:
       - name: Execution pipeline complet
         env:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
         run: python run_quran_video_pipeline.py
       - name: Sauvegarde video finale
         uses: actions/upload-artifact@v4
