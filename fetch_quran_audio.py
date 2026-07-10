@@ -106,7 +106,11 @@ def concat_mp3(paths, output):
 
 
 def normalize_audio(input_path, output_path):
-    """Normalise le volume de l'audio final."""
+    """
+    Egalise UNIQUEMENT le volume entre les versets (chaque fichier mp3 officiel
+    peut avoir un niveau sonore légèrement différent). Aucun autre traitement
+    (pas de reverb, pas d'EQ, pas de compression) : la voix reste inchangée.
+    """
     subprocess.run([
         "ffmpeg", "-y", "-i", str(input_path),
         "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
@@ -134,6 +138,7 @@ def main():
     print(f"Versets : {start_ayah} à {end_ayah}")
 
     downloaded = []
+    segments   = []   # liste ordonnée de versets réellement inclus (pour sync vidéo)
     total_dur  = 0.0
 
     for ayah in range(start_ayah, end_ayah + 1):
@@ -144,6 +149,10 @@ def main():
         ok = download_ayah(reciter_id, surah_num, ayah, dest)
         if ok:
             dur = get_audio_duration(dest)
+            segments.append({
+                "surah": surah_num, "ayah": ayah,
+                "start": round(total_dur, 3), "duration": round(dur, 3)
+            })
             total_dur += dur
             downloaded.append(dest)
             print(f"OK ({dur:.1f}s, total={total_dur:.1f}s)")
@@ -164,6 +173,10 @@ def main():
                 ok = download_ayah(reciter_id, s_num, ayah, dest)
                 if ok:
                     dur = get_audio_duration(dest)
+                    segments.append({
+                        "surah": s_num, "ayah": ayah,
+                        "start": round(total_dur, 3), "duration": round(dur, 3)
+                    })
                     total_dur += dur
                     downloaded.append(dest)
                 time.sleep(0.2)
@@ -193,12 +206,16 @@ def main():
     print(f"Sourate : {surah_name} (versets {start_ayah}-{min(end_ayah, start_ayah+len(downloaded)-1)})")
 
     # Sauvegarde des métadonnées pour l'étape vidéo (utilisées par produce_quran_video.py)
+    # "segments" donne le timestamp exact de début/fin de chaque verset dans le
+    # fichier audio final -> permet à l'étape vidéo de ne JAMAIS couper un verset.
     meta = {
         "surah_name": surah_name,
         "reciter_name": reciter_name,
         "surah_num": surah_num,
         "start_ayah": start_ayah,
-        "end_ayah": end_ayah,
+        "end_ayah": min(end_ayah, start_ayah + len(downloaded) - 1),
+        "total_duration": round(total_dur, 3),
+        "segments": segments,
     }
     Path("quran_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
 
