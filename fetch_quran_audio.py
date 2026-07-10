@@ -23,7 +23,14 @@ from pathlib import Path
 
 OUTPUT_FILE     = Path("quran_recitation.mp3")
 TEMP_DIR        = Path("quran_temp")
+HISTORY_FILE    = Path("quran_history.json")   # mémoire persistante entre les runs (commitée dans le dépôt)
+HISTORY_LEN     = 4   # nombre de derniers choix à exclure du tirage suivant
 TARGET_DURATION = 75   # secondes minimum  (FIX: renommé depuis TARGET_DUR pour matcher les usages plus bas)
+
+# Générateur aléatoire basé sur l'entropie du système (/dev/urandom), plus
+# robuste qu'un simple random.choice() qui peut, sur certains runners CI,
+# partager un seed proche d'une exécution à l'autre.
+rng = random.SystemRandom()
 
 # Récitateurs connus pour leur voix douce et apaisante
 # Format : (identifiant everyayah, nom affichage, qualité)
@@ -119,21 +126,47 @@ def normalize_audio(input_path, output_path):
     ], capture_output=True, check=False)
 
 
+def load_history():
+    if HISTORY_FILE.exists():
+        try:
+            return json.loads(HISTORY_FILE.read_text())
+        except Exception:
+            return []
+    return []
+
+
+def save_history(history, reciter_id, surah_num):
+    history.append({"reciter_id": reciter_id, "surah_num": surah_num})
+    history = history[-HISTORY_LEN:]   # ne garde que les derniers choix
+    HISTORY_FILE.write_text(json.dumps(history, ensure_ascii=False, indent=2))
+
+
+def pick_without_recent_repeat(pool, recent_values, key_fn):
+    """Tire un élément de pool en évitant si possible les valeurs récentes."""
+    filtered = [item for item in pool if key_fn(item) not in recent_values]
+    return rng.choice(filtered) if filtered else rng.choice(pool)
+
+
 def main():
     TEMP_DIR.mkdir(exist_ok=True)
 
-    # Choix du récitateur
-    reciter = random.choice(RECITERS)
+    history = load_history()
+    recent_reciters = {h["reciter_id"] for h in history}
+    recent_surahs   = {h["surah_num"] for h in history}
+
+    # Choix du récitateur (en évitant les derniers utilisés)
+    reciter = pick_without_recent_repeat(RECITERS, recent_reciters, key_fn=lambda r: r[0])
     reciter_id, reciter_name, quality = reciter
     print(f"Récitateur : {reciter_name} ({quality})")
 
-    # Stratégie : choisir une sourate longue et télécharger ~25-35 versets consécutifs
-    surah_info = random.choice(LONG_SURAHS)
+    # Stratégie : choisir une sourate longue (en évitant les dernières utilisées)
+    # et télécharger ~25-35 versets consécutifs
+    surah_info = pick_without_recent_repeat(LONG_SURAHS, recent_surahs, key_fn=lambda s: s[0])
     surah_num, surah_name, total_ayahs = surah_info
     print(f"Sourate : {surah_num} - {surah_name} ({total_ayahs} versets)")
 
     # Point de départ aléatoire dans la sourate
-    start_ayah = random.randint(1, max(1, total_ayahs - 25))
+    start_ayah = rng.randint(1, max(1, total_ayahs - 25))
     end_ayah   = min(total_ayahs, start_ayah + 35)
     print(f"Versets : {start_ayah} à {end_ayah}")
 
@@ -163,7 +196,7 @@ def main():
     # Si pas assez de durée, complète avec des courtes sourates
     if total_dur < TARGET_DURATION:
         print(f"\nDurée insuffisante ({total_dur:.1f}s), ajout de sourates courtes...")
-        random.shuffle(SHORT_SURAHS)
+        random.shuffle(SHORT_SURAHS)  # ordre non critique ici (source de secours uniquement)
         for s_num in SHORT_SURAHS:
             if total_dur >= TARGET_DURATION:
                 break
@@ -218,6 +251,11 @@ def main():
         "segments": segments,
     }
     Path("quran_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+
+    # Mise à jour de l'historique (pour éviter de retomber sur la même
+    # sourate/récitateur au prochain run -- voir workflow pour le commit)
+    save_history(history, reciter_id, surah_num)
+    print(f"Historique mis à jour : {HISTORY_FILE} ({len(load_history())} entrées)")
 
 
 if __name__ == "__main__":
