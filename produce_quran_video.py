@@ -13,7 +13,7 @@ RÈGLES D'OR :
 
 Effets vidéo (qualité cinéma) :
   - Color grade chaud (tons dorés/spirituels)
-  - Transitions crossfade fluides entre plans (xfade)
+  - Coupes nettes entre plans (montage direct, robuste et rythmé)
   - Vignette (bords sombres pour focus central)
   - Grain de film très subtil
   - Carte de titre stylisée en ouverture
@@ -50,7 +50,6 @@ USER_AGENT      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 W, H     = 1080, 1920
 FPS      = 30
-XFADE    = 0.6     # durée crossfade en secondes (assez courte pour rester nette)
 TITLE_DUR = 2.5    # carte de titre courte : les 3 premières secondes sont cruciales pour la rétention
 SAFETY_MARGIN = 1.0  # secondes de marge vidéo en plus de l'audio, avant gel de la dernière image
 
@@ -326,49 +325,37 @@ def make_caption_overlay(surah_name, ayah_range):
     return dest
 
 
-# ─── XFADE CHAIN ────────────────────────────────────────────────────────────
+# ─── ASSEMBLAGE (coupes nettes) ─────────────────────────────────────────────
+# Note : on utilisait auparavant des transitions en fondu-enchaîné (xfade),
+# mais ce filtre est fragile dès qu'un clip source a une durée réelle
+# légèrement différente de la durée prévue -- ça décale le calcul des offsets
+# et ça peut produire un écran noir à partir de la transition concernée.
+# Le concat simple (coupe nette) élimine complètement ce risque, et reste très
+# dynamique/adapté au format TikTok/Reels/Shorts (le fade-in/out appliqué sur
+# chaque clip dans process_clip donne déjà un rendu propre à chaque coupe).
 
-def build_xfade(clip_paths, clip_durations, xfade_dur=XFADE):
-    if len(clip_paths) == 1:
-        return "[0:v]", ""
-
-    filter_parts = []
-    offset = 0.0
-    cur_out = "[0:v]"
-
-    for i in range(len(clip_paths) - 1):
-        offset += clip_durations[i] - xfade_dur
-        next_in = f"[{i+1}:v]"
-        out_lbl = f"[v{i+1}]" if i < len(clip_paths) - 2 else "[vout]"
-        filter_parts.append(
-            f"{cur_out}{next_in}xfade=transition=fade:"
-            f"duration={xfade_dur}:offset={offset:.3f}{out_lbl}"
-        )
-        cur_out = out_lbl
-        offset += xfade_dur
-
-    return "[vout]", ";".join(filter_parts)
-
-
-def build_silent_video(clip_paths, clip_durations, output):
-    """Assemble tous les clips (avec xfade) SANS audio -> mesure ensuite la durée réelle."""
+def build_silent_video(clip_paths, output):
+    """Concatène tous les clips (coupes nettes, sans transition) SANS audio."""
     if len(clip_paths) == 1:
         return run(["ffmpeg", "-y", "-i", str(clip_paths[0]), "-c:v", "copy", str(output)],
                     "Piste vidéo (clip unique)")
 
-    out_label, filter_str = build_xfade(clip_paths, clip_durations)
     inputs = []
     for p in clip_paths:
         inputs += ["-i", str(p)]
 
+    n = len(clip_paths)
+    concat_inputs = "".join(f"[{i}:v]" for i in range(n))
+    filter_str = f"{concat_inputs}concat=n={n}:v=1:a=0[vout]"
+
     cmd = ["ffmpeg", "-y"] + inputs + [
         "-filter_complex", filter_str,
-        "-map", out_label,
+        "-map", "[vout]",
         "-c:v", "libx264", "-preset", "slow", "-crf", "18",
         "-pix_fmt", "yuv420p",
         str(output)
     ]
-    return run(cmd, "Piste vidéo silencieuse (xfade)")
+    return run(cmd, "Piste vidéo silencieuse (concat, coupes nettes)")
 
 
 def pad_to_duration(src, dest, target_duration):
@@ -505,15 +492,15 @@ def main():
     all_clips = [title_clip] + processed_clips
     all_durs  = [title_dur] + processed_durs
     i = 0
-    while sum(all_durs) - (len(all_clips) - 1) * XFADE < total_audio_dur + SAFETY_MARGIN:
+    while sum(all_durs) < total_audio_dur + SAFETY_MARGIN:
         all_clips.append(processed_clips[i % len(processed_clips)])
         all_durs.append(processed_durs[i % len(processed_durs)])
         i += 1
 
-    # 4. Piste vidéo silencieuse (xfade) puis garantie de durée >= audio
-    print(f"\n[4/6] Assemblage vidéo silencieuse ({len(all_clips)} clips, xfade {XFADE}s)...")
+    # 4. Piste vidéo silencieuse (coupes nettes) puis garantie de durée >= audio
+    print(f"\n[4/6] Assemblage vidéo silencieuse ({len(all_clips)} clips, coupes nettes)...")
     silent_video = WORK_DIR / "silent_video.mp4"
-    if not build_silent_video(all_clips, all_durs, silent_video):
+    if not build_silent_video(all_clips, silent_video):
         print("Erreur lors de l'assemblage vidéo.", file=sys.stderr)
         sys.exit(1)
 
@@ -541,7 +528,7 @@ def main():
     print(f"   Audio original de la récitation (durée {total_audio_dur:.1f}s) intégralement conservé")
     print(f"   Résolution : {W}x{H} | FPS : {FPS} | CRF : 18 (haute qualité)")
     print(f"   Audio : original, aucun effet appliqué")
-    print(f"   Effets vidéo : color grade chaud + xfade + vignette + grain + bandeau")
+    print(f"   Effets vidéo : color grade chaud + coupes nettes + vignette + grain + bandeau")
 
 
 if __name__ == "__main__":
