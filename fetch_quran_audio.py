@@ -14,12 +14,15 @@ Sources :
 import json
 import os
 import random
+import socket
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.request
 from pathlib import Path
+
+socket.setdefaulttimeout(25)  # évite un blocage réseau indéfini (DNS/connexion)
 
 OUTPUT_FILE     = Path("quran_recitation.mp3")
 TEMP_DIR        = Path("quran_temp")
@@ -34,11 +37,15 @@ rng = random.SystemRandom()
 
 # Récitateurs connus pour leur voix douce et apaisante
 # Format : (identifiant everyayah, nom affichage, qualité)
+# NOTE : "Ibrahim_walk_192kbps" a été retiré -- ce chemin n'existe pas sur
+# everyayah.com sous cette forme. Le vrai contenu associé à "Ibrahim Walk" est
+# en fait une lecture de la TRADUCTION ANGLAISE (Sahih International), pas une
+# récitation arabe du Coran (chemin réel : English/Sahih_Intnl_Ibrahim_Walk_192kbps).
+# Il n'a donc pas sa place dans une liste de récitateurs coraniques.
 RECITERS = [
     ("Alafasy_128kbps",        "Mishary Rashid Alafasy",        "128kbps"),
     ("Abdul_Basit_Murattal_192kbps", "Abdul Basit Murattal",    "192kbps"),
     ("Husary_128kbps",         "Mahmoud Khalil Al-Husary",      "128kbps"),
-    ("Ibrahim_walk_192kbps",   "Ibrahim Walk",                  "192kbps"),
     ("Minshawy_Murattal_128kbps","Mohamed Siddiq Al-Minshawi",  "128kbps"),
     ("Saood_ash-Shuraym_128kbps","Saud Al-Shuraym",             "128kbps"),
     ("Abdul_Basit_Mujawwad_128kbps","Abdul Basit Mujawwad",     "128kbps"),
@@ -173,6 +180,7 @@ def main():
     downloaded = []
     segments   = []   # liste ordonnée de versets réellement inclus (pour sync vidéo)
     total_dur  = 0.0
+    consecutive_fails = 0
 
     for ayah in range(start_ayah, end_ayah + 1):
         if total_dur >= TARGET_DURATION:
@@ -188,9 +196,15 @@ def main():
             })
             total_dur += dur
             downloaded.append(dest)
+            consecutive_fails = 0
             print(f"OK ({dur:.1f}s, total={total_dur:.1f}s)")
         else:
+            consecutive_fails += 1
             print("ECHEC (ignoré)")
+            if consecutive_fails >= 5:
+                print("  ! 5 échecs consécutifs -> ce récitateur/chemin semble cassé, "
+                      "on arrête cette sourate et on passe au complément.")
+                break
         time.sleep(0.3)   # respecte le serveur
 
     # Si pas assez de durée, complète avec des courtes sourates
@@ -200,7 +214,7 @@ def main():
         for s_num in SHORT_SURAHS:
             if total_dur >= TARGET_DURATION:
                 break
-            # Nombre de versets approximatif (on prend jusqu'à 10)
+            fails_here = 0
             for ayah in range(1, 11):
                 dest = TEMP_DIR / f"short_{s_num:03d}_{ayah:03d}.mp3"
                 ok = download_ayah(reciter_id, s_num, ayah, dest)
@@ -212,6 +226,11 @@ def main():
                     })
                     total_dur += dur
                     downloaded.append(dest)
+                    fails_here = 0
+                else:
+                    fails_here += 1
+                    if fails_here >= 3:
+                        break   # sourate/chemin cassé, on passe à la suivante
                 time.sleep(0.2)
                 if total_dur >= TARGET_DURATION:
                     break
