@@ -225,6 +225,7 @@ def process_clip(src, dest, duration, idx):
         f"fps={FPS},"
         f"scale=-2:{H}:flags=lanczos,"
         f"crop={W}:{H}:(iw-{W})/2:0,"
+        f"setsar=1,"
         f"{color_grade},"
         f"vignette=PI/5:mode=backward,"
         f"noise=alls=2:allf=t+u,"
