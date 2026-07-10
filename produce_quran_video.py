@@ -13,7 +13,6 @@ RÈGLES D'OR :
 
 Effets vidéo (qualité cinéma) :
   - Color grade chaud (tons dorés/spirituels)
-  - Ken Burns très lent sur chaque plan
   - Transitions crossfade fluides entre plans (xfade)
   - Vignette (bords sombres pour focus central)
   - Grain de film très subtil
@@ -208,14 +207,12 @@ def process_clip(src, dest, duration, idx):
     """
     Traitement cinématique d'un clip :
     1. Scale/crop portrait 1080x1920
-    2. Ken Burns très lent (zoom 1.0 → 1.05)
-    3. Color grade chaud (dorés/spirituels)
-    4. Vignette + grain film subtil
-    5. Fade-in/out
+    2. Color grade chaud (dorés/spirituels)
+    3. Vignette + grain film subtil
+    4. Fade-in/out
+    (Note : l'effet Ken Burns/zoompan a été retiré -- il provoquait un écran
+    noir après quelques secondes sur les vidéos de stock en framerate variable.)
     """
-    n_frames  = max(int(duration * FPS), 1)
-    zoom_spd  = 0.05 / n_frames
-
     color_grade = (
         "curves=r='0/0.03 0.5/0.52 1/1':"
         "g='0/0.02 0.5/0.50 1/0.97':"
@@ -226,15 +223,9 @@ def process_clip(src, dest, duration, idx):
 
     fade_out_start = max(duration - 0.4, 0.1)
     vf = (
-        # IMPORTANT : forcer une cadence fixe (CFR) AVANT zoompan. Les vidéos de stock
-        # sont souvent en framerate variable (VFR) ; zoompan s'attend à un nombre de
-        # frames source correspondant exactement à la durée demandée. Sans ce fps= en
-        # amont, zoompan manque d'images une fois le VFR "épuisé" et sort du noir pour
-        # le reste du clip -- c'est la cause de l'écran noir après quelques secondes.
         f"fps={FPS},"
         f"scale=-2:{H}:flags=lanczos,"
         f"crop={W}:{H}:(iw-{W})/2:0,"
-        f"zoompan=z='min(zoom+{zoom_spd:.7f},1.05)':d={n_frames}:s={W}x{H}:fps={FPS},"
         f"{color_grade},"
         f"vignette=PI/5:mode=backward,"
         f"noise=alls=2:allf=t+u,"
@@ -254,7 +245,7 @@ def process_clip(src, dest, duration, idx):
         "-crf", "18",
         "-pix_fmt", "yuv420p",
         str(dest)
-    ], f"Clip {idx} → color grade + Ken Burns + vignette")
+    ], f"Clip {idx} → color grade + vignette")
 
 
 # ─── TITRE + BANDEAU (safe zones TikTok/Reels/Shorts) ──────────────────────
@@ -550,7 +541,7 @@ def main():
     print(f"   Audio original de la récitation (durée {total_audio_dur:.1f}s) intégralement conservé")
     print(f"   Résolution : {W}x{H} | FPS : {FPS} | CRF : 18 (haute qualité)")
     print(f"   Audio : original, aucun effet appliqué")
-    print(f"   Effets vidéo : color grade chaud + Ken Burns + xfade + vignette + grain + bandeau")
+    print(f"   Effets vidéo : color grade chaud + xfade + vignette + grain + bandeau")
 
 
 if __name__ == "__main__":
