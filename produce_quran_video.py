@@ -40,9 +40,14 @@ OUTPUT_FILE  = Path("quran_video.mp4")
 WORK_DIR     = Path("quran_video_work")
 META_FILE    = Path("quran_meta.json")
 
-PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
-PEXELS_VIDEO   = "https://api.pexels.com/videos/search"
-USER_AGENT     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+PEXELS_API_KEY  = os.environ.get("PEXELS_API_KEY")
+PEXELS_VIDEO    = "https://api.pexels.com/videos/search"
+PIXABAY_API_KEY = os.environ.get("PIXABAY_API_KEY")   # optionnel : ajoute la variable
+                                                        # d'env/secret PIXABAY_API_KEY
+                                                        # pour activer cette 2e source
+                                                        # (clé gratuite sur pixabay.com/api/docs)
+PIXABAY_VIDEO   = "https://pixabay.com/api/videos/"
+USER_AGENT      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 W, H     = 1080, 1920
 FPS      = 30
@@ -50,15 +55,38 @@ XFADE    = 0.6     # durée crossfade en secondes (assez courte pour rester nett
 TITLE_DUR = 2.5    # carte de titre courte : les 3 premières secondes sont cruciales pour la rétention
 SAFETY_MARGIN = 1.0  # secondes de marge vidéo en plus de l'audio, avant gel de la dernière image
 
-# Requêtes Pexels : paysages spirituels et apaisants, sans personnes
+# Requêtes pensées spécifiquement pour coller à l'esthétique des vidéos de
+# récitation coranique qui circulent (mosquées, calligraphie, lumière douce,
+# nature contemplative) -- pas juste "paysage joli" générique.
 QUERIES = [
+    # Mosquées / architecture islamique
     "mosque architecture islamic dome",
     "islamic architecture interior",
-    "kaaba mecca aerial",
     "mosque minaret sunset",
+    "mosque courtyard sunset",
+    "medina mosque green dome",
+    "mecca kaaba aerial",
+    "grand mosque interior columns",
+    "mosque dome sunlight",
     "islamic geometric pattern",
+    "islamic geometric mandala pattern",
+    "arabesque pattern gold",
+    # Calligraphie / objets spirituels
+    "quran book pages close up",
+    "islamic calligraphy art",
+    "prayer beads tasbih",
+    "hands open dua prayer",
+    "candle light peaceful",
+    "incense smoke slow motion",
+    # Lumière / ciel
     "crescent moon night sky",
+    "ramadan lantern night",
+    "sunlight through window rays",
+    "sunbeams through clouds",
+    "golden hour light trees",
+    # Nature contemplative
     "desert golden sunset landscape",
+    "desert dunes sunrise slow",
     "ocean waves sunrise peaceful",
     "mountain mist sunrise aerial",
     "river calm reflection nature",
@@ -66,6 +94,8 @@ QUERIES = [
     "waterfall nature peaceful",
     "sand dunes desert wind",
     "clouds aerial drone above",
+    "rain window calm",
+    # Espace et univers
     "stars milky way night timelapse",
     "aurora borealis night sky",
     "galaxy nebula space",
@@ -115,6 +145,59 @@ def pexels_search(query, per_page=5):
         return json.loads(r.read())
 
 
+def pexels_candidates(query, per_page=5):
+    """Retourne une liste normalisée [(url, duration_s), ...] depuis Pexels."""
+    out = []
+    try:
+        data = pexels_search(query, per_page=per_page)
+        for video in data.get("videos", []):
+            dur_v = video.get("duration", 0)
+            if dur_v < 5:
+                continue
+            vfiles = video.get("video_files", [])
+            landscape = [f for f in vfiles if f.get("width", 0) > f.get("height", 0)]
+            pool = landscape if landscape else vfiles
+            hd = [f for f in pool if f.get("width", 0) >= 1280]
+            pool = hd if hd else pool
+            if not pool:
+                continue
+            best = min(pool, key=lambda f: abs(f.get("width", 0) - 1920))
+            url = best.get("link", "")
+            if url:
+                out.append((url, min(dur_v, 12)))
+    except Exception as e:
+        print(f"  ! Pexels erreur pour '{query}' : {e}", file=sys.stderr)
+    return out
+
+
+def pixabay_candidates(query, per_page=5):
+    """Retourne une liste normalisée [(url, duration_s), ...] depuis Pixabay."""
+    if not PIXABAY_API_KEY:
+        return []
+    out = []
+    try:
+        url = (f"{PIXABAY_VIDEO}?key={PIXABAY_API_KEY}"
+               f"&q={urllib.parse.quote(query)}&per_page={per_page}"
+               f"&video_type=film&safesearch=true")
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read())
+        for video in data.get("hits", []):
+            dur_v = video.get("duration", 0)
+            if dur_v < 5:
+                continue
+            videos = video.get("videos", {})
+            # Pixabay propose plusieurs résolutions : large, medium, small
+            for size in ["large", "medium", "small"]:
+                v = videos.get(size)
+                if v and v.get("width", 0) > v.get("height", 0) and v.get("url"):
+                    out.append((v["url"], min(dur_v, 12)))
+                    break
+    except Exception as e:
+        print(f"  ! Pixabay erreur pour '{query}' : {e}", file=sys.stderr)
+    return out
+
+
 def download_video(url, dest):
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=60) as r, open(dest, "wb") as out:
@@ -143,7 +226,13 @@ def process_clip(src, dest, duration, idx):
 
     fade_out_start = max(duration - 0.4, 0.1)
     vf = (
-        f"scale=-1:{H}:flags=lanczos,"
+        # IMPORTANT : forcer une cadence fixe (CFR) AVANT zoompan. Les vidéos de stock
+        # sont souvent en framerate variable (VFR) ; zoompan s'attend à un nombre de
+        # frames source correspondant exactement à la durée demandée. Sans ce fps= en
+        # amont, zoompan manque d'images une fois le VFR "épuisé" et sort du noir pour
+        # le reste du clip -- c'est la cause de l'écran noir après quelques secondes.
+        f"fps={FPS},"
+        f"scale=-2:{H}:flags=lanczos,"
         f"crop={W}:{H}:(iw-{W})/2:0,"
         f"zoompan=z='min(zoom+{zoom_spd:.7f},1.05)':d={n_frames}:s={W}x{H}:fps={FPS},"
         f"{color_grade},"
@@ -387,31 +476,20 @@ def main():
     for query in queries:
         if sum(d for _, d in clips_info) >= needed:
             break
-        try:
-            print(f"  Recherche : '{query}'")
-            data = pexels_search(query, per_page=3)
-            for video in data.get("videos", []):
-                dur_v = video.get("duration", 0)
-                if dur_v < 5: continue
-                vfiles = video.get("video_files", [])
-                if not vfiles: continue
-                hd = [f for f in vfiles if f.get("width", 0) >= 1280]
-                pool = hd if hd else vfiles
-                best = min(pool, key=lambda f: abs(f.get("width", 0) - 1920))
-                url = best.get("link", "")
-                if not url: continue
-                dest = WORK_DIR / f"raw_{idx:03d}.mp4"
-                try:
-                    print(f"    Téléchargement clip {idx} ({min(dur_v,12):.0f}s)...")
-                    download_video(url, dest)
-                    clips_info.append((dest, min(dur_v, 12)))
-                    idx += 1
-                except Exception as e:
-                    print(f"    ! {e}", file=sys.stderr)
-                time.sleep(0.3)
+        print(f"  Recherche : '{query}'")
+        candidates = pexels_candidates(query, per_page=3) + pixabay_candidates(query, per_page=3)
+        for url, dur_v in candidates:
+            if sum(d for _, d in clips_info) >= needed:
                 break
-        except Exception as e:
-            print(f"  ! Erreur : {e}", file=sys.stderr)
+            dest = WORK_DIR / f"raw_{idx:03d}.mp4"
+            try:
+                print(f"    Téléchargement clip {idx} ({dur_v:.0f}s)...")
+                download_video(url, dest)
+                clips_info.append((dest, dur_v))
+                idx += 1
+            except Exception as e:
+                print(f"    ! {e}", file=sys.stderr)
+            time.sleep(0.3)
 
     if not clips_info:
         print("Erreur : aucun clip visuel téléchargé.", file=sys.stderr)
