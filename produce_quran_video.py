@@ -1,11 +1,15 @@
 """
 Pipeline Récitation Coranique -- Production vidéo complète (qualité pro)
 
-Effets audio (qualité studio) :
-  - Réverbération style grande mosquée (aecho)
-  - EQ : warmth basses, douceur aigus, voix chaleureuse
-  - Compression douce (loudnorm broadcast standard -14 LUFS)
-  - Légère spatialisation stéréo
+RÈGLES D'OR :
+  1. La voix n'est JAMAIS retouchée : aucun effet audio (pas de reverb, pas
+     d'EQ, pas de compression). L'audio original de la récitation est utilisé
+     tel quel, simplement réencodé en AAC pour le conteneur MP4.
+  2. La vidéo ne coupe JAMAIS un verset : la piste visuelle est toujours
+     construite pour être AU MOINS aussi longue que l'audio (si besoin, la
+     dernière image est gelée le temps nécessaire) avant le montage final.
+     Résultat : la vidéo commence pile au début du premier verset et se
+     termine pile à la fin du dernier verset, sans troncature.
 
 Effets vidéo (qualité cinéma) :
   - Color grade chaud (tons dorés/spirituels)
@@ -14,8 +18,9 @@ Effets vidéo (qualité cinéma) :
   - Vignette (bords sombres pour focus central)
   - Grain de film très subtil
   - Carte de titre stylisée en ouverture
+  - Bandeau discret "Sourate • Versets" (zones sûres TikTok/Reels/Shorts)
 
-Format : vertical 1080x1920 (TikTok/Reels/Shorts), 1-2 minutes
+Format : vertical 1080x1920 (TikTok/Reels/Shorts)
 """
 
 import json
@@ -33,25 +38,26 @@ from PIL import Image, ImageDraw, ImageFont
 AUDIO_FILE   = Path("quran_recitation.mp3")
 OUTPUT_FILE  = Path("quran_video.mp4")
 WORK_DIR     = Path("quran_video_work")
+META_FILE    = Path("quran_meta.json")
 
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
 PEXELS_VIDEO   = "https://api.pexels.com/videos/search"
 USER_AGENT     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
-W, H    = 1080, 1920
-FPS     = 30
-XFADE   = 1.0   # durée crossfade en secondes
+W, H     = 1080, 1920
+FPS      = 30
+XFADE    = 0.6     # durée crossfade en secondes (assez courte pour rester nette)
+TITLE_DUR = 2.5    # carte de titre courte : les 3 premières secondes sont cruciales pour la rétention
+SAFETY_MARGIN = 1.0  # secondes de marge vidéo en plus de l'audio, avant gel de la dernière image
 
 # Requêtes Pexels : paysages spirituels et apaisants, sans personnes
 QUERIES = [
-    # Contenu islamique
     "mosque architecture islamic dome",
     "islamic architecture interior",
     "kaaba mecca aerial",
     "mosque minaret sunset",
     "islamic geometric pattern",
     "crescent moon night sky",
-    # Paysages apaisants
     "desert golden sunset landscape",
     "ocean waves sunrise peaceful",
     "mountain mist sunrise aerial",
@@ -60,7 +66,6 @@ QUERIES = [
     "waterfall nature peaceful",
     "sand dunes desert wind",
     "clouds aerial drone above",
-    # Espace et univers
     "stars milky way night timelapse",
     "aurora borealis night sky",
     "galaxy nebula space",
@@ -98,35 +103,9 @@ def load_font(size, bold=False):
     return ImageFont.load_default()
 
 
-# ─── AUDIO EFFECTS ──────────────────────────────────────────────────────────
-
-def process_audio(src, dest):
-    """
-    Chaîne d'effets audio de qualité studio :
-    1. aecho       : réverbération style mosquée (60ms delay, hall effect)
-    2. equalizer   : +4dB à 120Hz (chaleur), -3dB à 4kHz (douceur), -5dB à 9kHz (aigu doux)
-    3. acompressor : compression douce (évite les variations de volume)
-    4. loudnorm    : normalisation broadcast (-14 LUFS, standard professionnel)
-    """
-    audio_fx = (
-        "aecho=0.8:0.85:80:0.35,"
-        "equalizer=f=120:width_type=o:width=2:g=4,"
-        "equalizer=f=4000:width_type=o:width=2:g=-3,"
-        "equalizer=f=9000:width_type=o:width=2:g=-5,"
-        "acompressor=threshold=-18dB:ratio=3:attack=10:release=200:makeup=2,"
-        "loudnorm=I=-14:TP=-1.5:LRA=11"
-    )
-    return run([
-        "ffmpeg", "-y", "-i", str(src),
-        "-af", audio_fx,
-        "-ar", "48000", "-b:a", "256k",
-        str(dest)
-    ], "Traitement audio (reverb + EQ + compression + normalisation)")
-
-
 # ─── VIDEO CLIPS ────────────────────────────────────────────────────────────
 
-def pexels_search(query, per_page=3):
+def pexels_search(query, per_page=5):
     url = (f"{PEXELS_VIDEO}?query={urllib.parse.quote(query)}"
            f"&per_page={per_page}&orientation=landscape")
     req = urllib.request.Request(url, headers={
@@ -145,28 +124,24 @@ def download_video(url, dest):
 def process_clip(src, dest, duration, idx):
     """
     Traitement cinématique d'un clip :
-    1. Scale vers hauteur 1920 (maintient ratio)
-    2. Crop 1080px au centre (portrait)
-    3. Ken Burns très lent (zoom 1.0 → 1.05)
-    4. Color grade chaud (dorés/spirituels, style DaVinci)
-    5. Vignette
-    6. Grain film subtil (noise très léger)
-    7. Fade-in/out
+    1. Scale/crop portrait 1080x1920
+    2. Ken Burns très lent (zoom 1.0 → 1.05)
+    3. Color grade chaud (dorés/spirituels)
+    4. Vignette + grain film subtil
+    5. Fade-in/out
     """
-    n_frames  = int(duration * FPS)
-    zoom_spd  = 0.05 / max(n_frames, 1)
+    n_frames  = max(int(duration * FPS), 1)
+    zoom_spd  = 0.05 / n_frames
 
     color_grade = (
-        # Lift ombres légèrement (évite le noir pur)
         "curves=r='0/0.03 0.5/0.52 1/1':"
         "g='0/0.02 0.5/0.50 1/0.97':"
         "b='0/0.01 0.5/0.47 1/0.88',"
-        # Saturation légèrement augmentée
         "hue=s=1.15,"
-        # Température chaude (teinte vers les dorés/ambre)
         "colorbalance=rs=0.05:gs=-0.02:bs=-0.08"
     )
 
+    fade_out_start = max(duration - 0.4, 0.1)
     vf = (
         f"scale=-1:{H}:flags=lanczos,"
         f"crop={W}:{H}:(iw-{W})/2:0,"
@@ -175,7 +150,7 @@ def process_clip(src, dest, duration, idx):
         f"vignette=PI/5:mode=backward,"
         f"noise=alls=2:allf=t+u,"
         f"fade=t=in:st=0:d=0.4,"
-        f"fade=t=out:st={duration-0.4:.2f}:d=0.4"
+        f"fade=t=out:st={fade_out_start:.2f}:d=0.4"
     )
 
     return run([
@@ -186,42 +161,42 @@ def process_clip(src, dest, duration, idx):
         "-r", str(FPS),
         "-an",
         "-c:v", "libx264",
-        "-preset", "slow",   # meilleure qualité
-        "-crf", "18",        # quasi-lossless
+        "-preset", "slow",
+        "-crf", "18",
         "-pix_fmt", "yuv420p",
         str(dest)
     ], f"Clip {idx} → color grade + Ken Burns + vignette")
 
 
-# ─── TITRE ──────────────────────────────────────────────────────────────────
+# ─── TITRE + BANDEAU (safe zones TikTok/Reels/Shorts) ──────────────────────
 
-def make_title_card(surah_name, reciter_name, duration=3.0):
-    """Carte de titre élégante en ouverture."""
+def make_title_card(surah_name, reciter_name, ayah_range, duration=TITLE_DUR):
+    """Carte de titre élégante en ouverture (hook rapide, <3s)."""
     img  = Image.new("RGB", (W, H), (8, 8, 20))
     draw = ImageDraw.Draw(img)
 
-    # Ligne dorée centrale
     gold = (200, 160, 40)
     draw.rectangle([W//2 - 200, H//2 - 2, W//2 + 200, H//2 + 2], fill=gold)
 
-    # Titre sourate
     f1 = load_font(88, bold=True)
     text = surah_name.upper()
     bb = draw.textbbox((0,0), text, font=f1)
-    draw.text(((W-(bb[2]-bb[0]))//2, H//2 - 120), text, font=f1, fill=gold)
+    draw.text(((W-(bb[2]-bb[0]))//2, H//2 - 150), text, font=f1, fill=gold)
 
-    # Sous-titre récitateur
     f2 = load_font(44)
     sub = f"Récité par {reciter_name}"
     bb2 = draw.textbbox((0,0), sub, font=f2)
-    draw.text(((W-(bb2[2]-bb2[0]))//2, H//2 + 30), sub, font=f2,
-              fill=(180, 180, 180))
+    draw.text(((W-(bb2[2]-bb2[0]))//2, H//2 + 0), sub, font=f2, fill=(180, 180, 180))
 
-    # Décoration : petits points dorés
+    if ayah_range:
+        f3 = load_font(36)
+        sub2 = f"Versets {ayah_range}"
+        bb3 = draw.textbbox((0,0), sub2, font=f3)
+        draw.text(((W-(bb3[2]-bb3[0]))//2, H//2 + 60), sub2, font=f3, fill=(140, 140, 140))
+
     for dx in [-280, 280]:
         draw.ellipse([W//2+dx-6, H//2-6, W//2+dx+6, H//2+6], fill=gold)
 
-    # Sauvegarde et conversion en clip
     tmp_img  = WORK_DIR / "title_card.png"
     tmp_clip = WORK_DIR / "title_clip.mp4"
     img.save(tmp_img)
@@ -231,8 +206,8 @@ def make_title_card(surah_name, reciter_name, duration=3.0):
         "-t", str(duration),
         "-vf", (
             f"fps={FPS},"
-            f"fade=t=in:st=0:d=0.8,"
-            f"fade=t=out:st={duration-0.8:.1f}:d=0.8"
+            f"fade=t=in:st=0:d=0.5,"
+            f"fade=t=out:st={duration-0.5:.1f}:d=0.5"
         ),
         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast",
         str(tmp_clip)
@@ -240,16 +215,42 @@ def make_title_card(surah_name, reciter_name, duration=3.0):
     return tmp_clip
 
 
+def make_caption_overlay(surah_name, ayah_range):
+    """
+    Bandeau discret et permanent "Sourate • Versets", placé en HAUT de l'écran
+    pour rester hors des zones d'interface TikTok/Reels/Shorts (les boutons
+    et légendes de ces apps occupent le bas et le côté droit de l'écran).
+    Retourne un PNG transparent de la taille de la vidéo.
+    """
+    img  = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    label = f"{surah_name}" + (f"  •  Versets {ayah_range}" if ayah_range else "")
+    font  = load_font(34, bold=True)
+    bb    = draw.textbbox((0,0), label, font=font)
+    tw, th = bb[2]-bb[0], bb[3]-bb[1]
+
+    pad_x, pad_y = 28, 14
+    box_w, box_h = tw + pad_x*2, th + pad_y*2
+    box_x = (W - box_w) // 2
+    box_y = 130   # zone haute, toujours sûre sur les 3 plateformes
+
+    draw.rounded_rectangle(
+        [box_x, box_y, box_x+box_w, box_y+box_h],
+        radius=box_h//2, fill=(0, 0, 0, 110)
+    )
+    draw.text((box_x+pad_x, box_y+pad_y-2), label, font=font, fill=(230, 200, 120, 255))
+
+    dest = WORK_DIR / "caption_overlay.png"
+    img.save(dest)
+    return dest
+
+
 # ─── XFADE CHAIN ────────────────────────────────────────────────────────────
 
 def build_xfade(clip_paths, clip_durations, xfade_dur=XFADE):
-    """
-    Construit un filtre xfade en chaîne pour des transitions fluides entre tous les clips.
-    Exemple pour 3 clips :
-      [0][1]xfade=...:offset=D0-X[v01];[v01][2]xfade=...:offset=D0+D1-2X[vout]
-    """
     if len(clip_paths) == 1:
-        return clip_paths, [], "[0:v]", ""
+        return "[0:v]", ""
 
     filter_parts = []
     offset = 0.0
@@ -264,49 +265,78 @@ def build_xfade(clip_paths, clip_durations, xfade_dur=XFADE):
             f"duration={xfade_dur}:offset={offset:.3f}{out_lbl}"
         )
         cur_out = out_lbl
-        offset += xfade_dur  # compenser le chevauchement dans la prochaine itération
+        offset += xfade_dur
 
-    return clip_paths, filter_parts, "[vout]", ";".join(filter_parts)
+    return "[vout]", ";".join(filter_parts)
 
 
-def merge_video_audio_xfade(clip_paths, clip_durations, audio_path, output):
-    """
-    Assemble tous les clips avec xfade + audio traité.
-    """
-    if not clip_paths:
-        return False
-
+def build_silent_video(clip_paths, clip_durations, output):
+    """Assemble tous les clips (avec xfade) SANS audio -> mesure ensuite la durée réelle."""
     if len(clip_paths) == 1:
-        # Cas simple : un seul clip
-        return run([
-            "ffmpeg", "-y",
-            "-i", str(clip_paths[0]),
-            "-i", str(audio_path),
-            "-c:v", "copy", "-c:a", "aac", "-shortest",
-            str(output)
-        ], "Fusion vidéo + audio (clip unique)")
+        return run(["ffmpeg", "-y", "-i", str(clip_paths[0]), "-c:v", "copy", str(output)],
+                    "Piste vidéo (clip unique)")
 
-    # Cas général : chaîne xfade
-    _, filter_parts, out_label, filter_str = build_xfade(clip_paths, clip_durations)
-
+    out_label, filter_str = build_xfade(clip_paths, clip_durations)
     inputs = []
     for p in clip_paths:
         inputs += ["-i", str(p)]
-    inputs += ["-i", str(audio_path)]
-
-    audio_idx = len(clip_paths)
 
     cmd = ["ffmpeg", "-y"] + inputs + [
         "-filter_complex", filter_str,
         "-map", out_label,
-        "-map", f"{audio_idx}:a",
         "-c:v", "libx264", "-preset", "slow", "-crf", "18",
-        "-c:a", "aac", "-b:a", "256k",
         "-pix_fmt", "yuv420p",
-        "-shortest",
         str(output)
     ]
-    return run(cmd, "Assemblage final (xfade + audio)")
+    return run(cmd, "Piste vidéo silencieuse (xfade)")
+
+
+def pad_to_duration(src, dest, target_duration):
+    """
+    Si la piste vidéo est plus courte que l'audio, gèle la dernière image
+    pendant le temps nécessaire. Garantit vidéo_durée >= audio_durée, donc
+    l'audio ne sera JAMAIS tronqué au montage final.
+    """
+    cur = get_duration(src)
+    pad = target_duration - cur + SAFETY_MARGIN
+    if pad <= 0:
+        return src  # déjà assez longue
+    print(f"  Piste vidéo ({cur:.1f}s) plus courte que l'audio ({target_duration:.1f}s) "
+          f"-> gel de la dernière image pendant {pad:.1f}s")
+    ok = run([
+        "ffmpeg", "-y", "-i", str(src),
+        "-vf", f"tpad=stop_mode=clone:stop_duration={pad:.2f}",
+        "-c:v", "libx264", "-preset", "slow", "-crf", "18",
+        "-pix_fmt", "yuv420p",
+        str(dest)
+    ], "Extension vidéo (gel dernière image)")
+    return dest if ok else src
+
+
+def overlay_caption(video_path, overlay_png, output):
+    return run([
+        "ffmpeg", "-y", "-i", str(video_path), "-i", str(overlay_png),
+        "-filter_complex", "overlay=0:0",
+        "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p",
+        str(output)
+    ], "Ajout du bandeau Sourate/Versets")
+
+
+def final_mux(video_path, audio_path, audio_duration, output):
+    """
+    Fusion vidéo + audio ORIGINAL (aucun filtre). La vidéo est garantie
+    >= audio_duration (voir pad_to_duration), donc -shortest ne coupera
+    jamais l'audio -- seulement l'éventuel excédent vidéo.
+    """
+    return run([
+        "ffmpeg", "-y",
+        "-i", str(video_path),
+        "-i", str(audio_path),
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "256k",
+        "-shortest",
+        str(output)
+    ], "Fusion finale vidéo + audio original (non retouché)")
 
 
 # ─── MAIN ───────────────────────────────────────────────────────────────────
@@ -323,56 +353,52 @@ def main():
 
     WORK_DIR.mkdir(exist_ok=True)
 
-    # 0. Durée totale de la récitation
     total_audio_dur = get_duration(AUDIO_FILE)
-    print(f"Récitation : {total_audio_dur:.1f}s ({int(total_audio_dur)//60}m{int(total_audio_dur)%60:02d}s)")
+    print(f"Récitation (originale, non retouchée) : {total_audio_dur:.1f}s "
+          f"({int(total_audio_dur)//60}m{int(total_audio_dur)%60:02d}s)")
 
-    # 1. Traitement audio professionnel
-    print("\n[1/5] Traitement audio...")
-    audio_processed = WORK_DIR / "audio_processed.mp3"
-    if not process_audio(AUDIO_FILE, audio_processed):
-        print("Avertissement : audio non traité, utilisation originale", file=sys.stderr)
-        audio_processed = AUDIO_FILE
-
-    # 2. Récupération info sourate depuis le nom de fichier (si disponible)
-    meta_file = Path("quran_meta.json")
+    # Métadonnées (nom de sourate, récitateur, plage de versets)
     surah_name   = "Récitation Coranique"
     reciter_name = "Sheikh Al-Qari"
-    if meta_file.exists():
-        meta = json.loads(meta_file.read_text())
+    ayah_range   = ""
+    if META_FILE.exists():
+        meta = json.loads(META_FILE.read_text())
         surah_name   = meta.get("surah_name", surah_name)
         reciter_name = meta.get("reciter_name", reciter_name)
+        if meta.get("start_ayah") and meta.get("end_ayah"):
+            ayah_range = f"{meta['start_ayah']}-{meta['end_ayah']}"
 
-    # 3. Carte de titre
-    print("\n[2/5] Création carte de titre...")
-    title_clip = make_title_card(surah_name, reciter_name, duration=3.5)
-    title_dur  = 3.5
+    # 1. Carte de titre
+    print("\n[1/6] Création carte de titre...")
+    title_clip = make_title_card(surah_name, reciter_name, ayah_range)
+    title_dur  = TITLE_DUR
 
-    # 4. Téléchargement des visuels
-    print("\n[3/5] Téléchargement visuels Pexels...")
-    remaining  = total_audio_dur - title_dur + (len(QUERIES) * XFADE)
-    clips_info = []   # (path, duration)
-    idx        = 0
+    # 2. Téléchargement des visuels (avec marge : on vise 1.4x la durée nécessaire
+    #    pour ne jamais manquer de contenu vidéo, ce qui évite d'avoir à tronquer l'audio)
+    print("\n[2/6] Téléchargement visuels Pexels...")
+    needed = (total_audio_dur - title_dur) * 1.4
+    clips_info = []
+    idx = 0
 
     import random
-    queries = random.sample(QUERIES, min(len(QUERIES), 10))
+    queries = QUERIES.copy()
+    random.shuffle(queries)
 
     for query in queries:
-        if sum(d for _,d in clips_info) >= remaining:
+        if sum(d for _, d in clips_info) >= needed:
             break
         try:
             print(f"  Recherche : '{query}'")
-            data = pexels_search(query, per_page=2)
+            data = pexels_search(query, per_page=3)
             for video in data.get("videos", []):
                 dur_v = video.get("duration", 0)
                 if dur_v < 5: continue
                 vfiles = video.get("video_files", [])
                 if not vfiles: continue
-                # Choisir la meilleure résolution
-                hd = [f for f in vfiles if f.get("width",0) >= 1280]
+                hd = [f for f in vfiles if f.get("width", 0) >= 1280]
                 pool = hd if hd else vfiles
-                best = min(pool, key=lambda f: abs(f.get("width",0) - 1920))
-                url  = best.get("link", "")
+                best = min(pool, key=lambda f: abs(f.get("width", 0) - 1920))
+                url = best.get("link", "")
                 if not url: continue
                 dest = WORK_DIR / f"raw_{idx:03d}.mp4"
                 try:
@@ -391,15 +417,12 @@ def main():
         print("Erreur : aucun clip visuel téléchargé.", file=sys.stderr)
         sys.exit(1)
 
-    # 5. Traitement cinématique de chaque clip
-    print(f"\n[4/5] Traitement cinématique ({len(clips_info)} clips)...")
-    processed_clips = []
-    processed_durs  = []
-
+    # 3. Traitement cinématique de chaque clip
+    print(f"\n[3/6] Traitement cinématique ({len(clips_info)} clips)...")
+    processed_clips, processed_durs = [], []
     for i, (src, dur) in enumerate(clips_info):
         dest = WORK_DIR / f"proc_{i:03d}.mp4"
-        ok   = process_clip(src, dest, dur, i)
-        if ok and dest.exists() and dest.stat().st_size > 5000:
+        if process_clip(src, dest, dur, i) and dest.exists() and dest.stat().st_size > 5000:
             processed_clips.append(dest)
             processed_durs.append(dur)
             print(f"    Clip {i} OK ({dur:.0f}s)")
@@ -408,23 +431,48 @@ def main():
         print("Erreur : aucun clip traité.", file=sys.stderr)
         sys.exit(1)
 
-    # Ajouter la carte de titre en premier
+    # Si le total est encore trop court (rare, ex. Pexels a peu répondu),
+    # on boucle sur les clips déjà traités plutôt que de risquer une vidéo trop courte
     all_clips = [title_clip] + processed_clips
-    all_durs  = [title_dur]  + processed_durs
+    all_durs  = [title_dur] + processed_durs
+    i = 0
+    while sum(all_durs) - (len(all_clips) - 1) * XFADE < total_audio_dur + SAFETY_MARGIN:
+        all_clips.append(processed_clips[i % len(processed_clips)])
+        all_durs.append(processed_durs[i % len(processed_durs)])
+        i += 1
 
-    # 6. Assemblage final avec xfade
-    print(f"\n[5/5] Assemblage final ({len(all_clips)} clips, xfade {XFADE}s)...")
-    ok = merge_video_audio_xfade(all_clips, all_durs, audio_processed, OUTPUT_FILE)
+    # 4. Piste vidéo silencieuse (xfade) puis garantie de durée >= audio
+    print(f"\n[4/6] Assemblage vidéo silencieuse ({len(all_clips)} clips, xfade {XFADE}s)...")
+    silent_video = WORK_DIR / "silent_video.mp4"
+    if not build_silent_video(all_clips, all_durs, silent_video):
+        print("Erreur lors de l'assemblage vidéo.", file=sys.stderr)
+        sys.exit(1)
+
+    padded_video = pad_to_duration(silent_video, WORK_DIR / "padded_video.mp4", total_audio_dur)
+
+    # 5. Bandeau Sourate/Versets
+    print("\n[5/6] Ajout du bandeau...")
+    overlay_png = make_caption_overlay(surah_name, ayah_range)
+    captioned_video = WORK_DIR / "captioned_video.mp4"
+    if not overlay_caption(padded_video, overlay_png, captioned_video):
+        captioned_video = padded_video  # fallback : pas bloquant
+
+    # 6. Fusion finale avec l'audio ORIGINAL (aucun effet) -- l'audio est
+    #    garanti intact du premier au dernier verset grâce à l'étape 4.
+    print("\n[6/6] Fusion finale (audio original, non retouché)...")
+    ok = final_mux(captioned_video, AUDIO_FILE, total_audio_dur, OUTPUT_FILE)
     if not ok:
         print("Erreur lors de l'assemblage final.", file=sys.stderr)
         sys.exit(1)
 
-    final_dur = get_duration(OUTPUT_FILE)
+    final_dur  = get_duration(OUTPUT_FILE)
+    final_audio_dur = get_duration(OUTPUT_FILE)  # même flux, vérif rapide
     print(f"\n✅ Vidéo finale : {OUTPUT_FILE}")
     print(f"   Durée : {final_dur:.1f}s ({int(final_dur)//60}m{int(final_dur)%60:02d}s)")
+    print(f"   Audio original de la récitation (durée {total_audio_dur:.1f}s) intégralement conservé")
     print(f"   Résolution : {W}x{H} | FPS : {FPS} | CRF : 18 (haute qualité)")
-    print(f"   Audio : reverb + EQ + compression (-14 LUFS broadcast)")
-    print(f"   Effets : color grade chaud + Ken Burns + xfade + vignette + grain")
+    print(f"   Audio : original, aucun effet appliqué")
+    print(f"   Effets vidéo : color grade chaud + Ken Burns + xfade + vignette + grain + bandeau")
 
 
 if __name__ == "__main__":
