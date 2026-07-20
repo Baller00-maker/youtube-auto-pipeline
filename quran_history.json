@@ -1,9 +1,5 @@
 [
   {
-    "reciter_id": "Husary_128kbps",
-    "surah_num": 73
-  },
-  {
     "reciter_id": "Abdul_Basit_Mujawwad_128kbps",
     "surah_num": 20
   },
@@ -14,5 +10,9 @@
   {
     "reciter_id": "Saood_ash-Shuraym_128kbps",
     "surah_num": 36
+  },
+  {
+    "reciter_id": "Minshawy_Murattal_128kbps",
+    "surah_num": 19
   }
 ]
